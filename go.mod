@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/bgentry/go-netrc v0.0.0-20140422174119-9fd32a8b3d3d
-	github.com/looker-open-source/sdk-codegen/go v0.26.8
+	github.com/looker-open-source/sdk-codegen/go v0.26.12
 	github.com/olekukonko/tablewriter v1.1.4
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/spf13/cobra v1.10.2
