@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.8](https://github.com/looker-open-source/looker-cli/compare/v0.4.7...v0.4.8) (2026-07-14)
+
+
+### Features
+
+* update to 26.12 api ([#301](https://github.com/looker-open-source/looker-cli/issues/301)) ([6171b07](https://github.com/looker-open-source/looker-cli/commit/6171b078ea8e327870f9512fd3c6c46873684066))
+
 ## [0.4.7](https://github.com/looker-open-source/looker-cli/compare/v0.4.6...v0.4.7) (2026-06-26)
 
 
