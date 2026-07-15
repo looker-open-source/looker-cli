@@ -620,6 +620,14 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 		b, _ := json.Marshal(validation)
 		return json.Unmarshal(b, result)
 	}
+	if method == "POST" && strings.HasPrefix(path, "/projects/") && strings.HasSuffix(path, "/commit") {
+		b, _ := json.Marshal("Commit successful")
+		return json.Unmarshal(b, result)
+	}
+	if method == "POST" && strings.HasPrefix(path, "/projects/") && strings.HasSuffix(path, "/push_branch") {
+		b, _ := json.Marshal("Push successful")
+		return json.Unmarshal(b, result)
+	}
 
 	return fmt.Errorf("mock path not found: %s", path)
 }
@@ -1835,6 +1843,71 @@ func TestProjectValidateCommand(t *testing.T) {
 		// It should print the table with the error
 		if !strings.Contains(out, "model.model.lkml") {
 			t.Errorf("expected output to contain file path, got %q", out)
+		}
+	})
+}
+
+func TestProjectCommitCommand(t *testing.T) {
+	MockSDK = v4.NewLookerSDK(&mockDoer{t: t})
+	defer func() { MockSDK = nil }()
+
+	t.Run("commit with message and files", func(t *testing.T) {
+		oldStdout := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+
+		RootCmd.SetArgs([]string{"project", "commit", "my_proj", "file1.lkml", "file2.lkml", "-m", "Initial commit", "--amend"})
+		err := RootCmd.Execute()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_ = w.Close()
+		os.Stdout = oldStdout
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		out := buf.String()
+
+		if !strings.Contains(out, "Commit successful") {
+			t.Errorf("expected Commit successful, got %q", out)
+		}
+	})
+
+	t.Run("commit missing required message flag", func(t *testing.T) {
+		projectCommitMessage = ""
+		_ = projectCommitCmd.Flags().Lookup("message").Value.Set("")
+		projectCommitCmd.Flags().Lookup("message").Changed = false
+		RootCmd.SetArgs([]string{"project", "commit", "my_proj"})
+		err := RootCmd.Execute()
+		if err == nil {
+			t.Fatalf("expected error for missing --message flag, got nil")
+		}
+	})
+}
+
+func TestProjectPushBranchCommand(t *testing.T) {
+	MockSDK = v4.NewLookerSDK(&mockDoer{t: t})
+	defer func() { MockSDK = nil }()
+
+	t.Run("push-branch command", func(t *testing.T) {
+		oldStdout := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+
+		RootCmd.SetArgs([]string{"project", "push-branch", "my_proj"})
+		err := RootCmd.Execute()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		_ = w.Close()
+		os.Stdout = oldStdout
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		out := buf.String()
+
+		if !strings.Contains(out, "Push successful") {
+			t.Errorf("expected Push successful, got %q", out)
 		}
 	})
 }
