@@ -65,8 +65,8 @@ type Schema struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run scratch/generate_api.go <looker_host> [port]")
-		fmt.Println("Example: go run scratch/generate_api.go sandbox.looker-devrel.com")
+		fmt.Println("Usage: go run tool/generate_api.go <looker_host> [port]")
+		fmt.Println("Example: go run tool/generate_api.go sandbox.looker-devrel.com")
 		os.Exit(1)
 	}
 
