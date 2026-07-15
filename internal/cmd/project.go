@@ -17,25 +17,28 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
-	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/looker-open-source/looker-cli/internal/util"
+	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
-	projectLsFields     string
-	projectLsPlain      bool
-	projectLsCSV        bool
-	projectCatFields    string
-	projectCatDir       string
-	projectCatTrim      bool
-	projectBranchAll    bool
-	projectBranchFields string
-	projectBranchPlain  bool
-	projectBranchCSV    bool
+	projectLsFields       string
+	projectLsPlain        bool
+	projectLsCSV          bool
+	projectCatFields      string
+	projectCatDir         string
+	projectCatTrim        bool
+	projectBranchAll      bool
+	projectBranchFields   string
+	projectBranchPlain    bool
+	projectBranchCSV      bool
+	projectCommitMessage  string
+	projectCommitAmend    bool
 	projectValidateFields string
 	projectValidatePlain  bool
 	projectValidateCSV    bool
@@ -180,6 +183,81 @@ var projectDeployKeyCmd = &cobra.Command{
 	},
 }
 
+type projectCommitRequest struct {
+	Files   *[]string `json:"files,omitempty"`
+	Message *string   `json:"message,omitempty"`
+	Amend   *bool     `json:"amend,omitempty"`
+}
+
+var projectCommitCmd = &cobra.Command{
+	Use:   "commit [PROJECT_ID] [FILES...]",
+	Short: "Commit changes in a project",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := initClient(cmd.Context(), false)
+		if err != nil {
+			return err
+		}
+		pID := args[0]
+		req := projectCommitRequest{}
+
+		if cmd.Flags().Changed("message") || projectCommitMessage != "" {
+			req.Message = &projectCommitMessage
+		}
+
+		if len(args) > 1 {
+			files := args[1:]
+			req.Files = &files
+		}
+
+		if cmd.Flags().Changed("amend") || projectCommitAmend {
+			req.Amend = &projectCommitAmend
+		}
+
+		var result string
+		path := fmt.Sprintf("/projects/%s/commit", url.PathEscape(pID))
+		err = c.SDK.AuthSession.Do(&result, "POST", "/4.0", path, nil, req, nil)
+		if err != nil {
+			return err
+		}
+
+		if strings.TrimSpace(result) != "" {
+			fmt.Println(result)
+		} else {
+			fmt.Printf("Committed changes for project %s.\n", pID)
+		}
+		return nil
+	},
+}
+
+var projectPushBranchCmd = &cobra.Command{
+	Use:     "push-branch [PROJECT_ID]",
+	Aliases: []string{"push"},
+	Short:   "Push active branch of a project to remote",
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := initClient(cmd.Context(), false)
+		if err != nil {
+			return err
+		}
+		pID := args[0]
+
+		var result string
+		path := fmt.Sprintf("/projects/%s/push_branch", url.PathEscape(pID))
+		err = c.SDK.AuthSession.Do(&result, "POST", "/4.0", path, nil, nil, nil)
+		if err != nil {
+			return err
+		}
+
+		if strings.TrimSpace(result) != "" {
+			fmt.Println(result)
+		} else {
+			fmt.Printf("Pushed branch for project %s.\n", pID)
+		}
+		return nil
+	},
+}
+
 var projectBranchCmd = &cobra.Command{
 	Use:   "branch [PROJECT_ID]",
 	Short: "List active branch or all branches of a project",
@@ -302,6 +380,8 @@ func init() {
 	ProjectCmd.AddCommand(projectImportCmd)
 	ProjectCmd.AddCommand(projectUpdateCmd)
 	ProjectCmd.AddCommand(projectBranchCmd)
+	ProjectCmd.AddCommand(projectCommitCmd)
+	ProjectCmd.AddCommand(projectPushBranchCmd)
 	ProjectCmd.AddCommand(projectDeployCmd)
 	ProjectCmd.AddCommand(projectCheckoutCmd)
 	ProjectCmd.AddCommand(projectCreateCmd)
@@ -321,6 +401,10 @@ func init() {
 	projectBranchCmd.Flags().StringVar(&projectBranchFields, "fields", "name,error,message", "Fields to display")
 	projectBranchCmd.Flags().BoolVar(&projectBranchPlain, "plain", false, "print without formatting")
 	projectBranchCmd.Flags().BoolVar(&projectBranchCSV, "csv", false, "output in csv format")
+
+	projectCommitCmd.Flags().StringVarP(&projectCommitMessage, "message", "m", "", "Commit message")
+	_ = projectCommitCmd.MarkFlagRequired("message")
+	projectCommitCmd.Flags().BoolVar(&projectCommitAmend, "amend", false, "Amend the last commit")
 
 	projectValidateCmd.Flags().StringVar(&projectValidateFields, "fields", "severity,file_path,line_number,message", "Fields to display")
 	projectValidateCmd.Flags().BoolVar(&projectValidatePlain, "plain", false, "print without formatting")
