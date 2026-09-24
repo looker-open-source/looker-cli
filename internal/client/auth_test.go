@@ -279,6 +279,9 @@ func TestPerformOAuthLogin_StdinFallback(t *testing.T) {
 }
 
 func TestNewClient_DeletesExpiredTokens(t *testing.T) {
+	t.Setenv("LOOKERSDK_CLIENT_ID", "")
+	t.Setenv("LOOKERSDK_CLIENT_SECRET", "")
+
 	tmpDir, err := os.MkdirTemp("", "looker_cli_test_*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -429,6 +432,9 @@ func TestNewClient_DeletesExpiredTokens(t *testing.T) {
 }
 
 func TestNewClient_UnauthorizedDeletesStoredToken(t *testing.T) {
+	t.Setenv("LOOKERSDK_CLIENT_ID", "")
+	t.Setenv("LOOKERSDK_CLIENT_SECRET", "")
+
 	tmpDir, err := os.MkdirTemp("", "looker_cli_test_*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
