@@ -24,15 +24,16 @@ import (
 
 // Profile represents a Looker CLI profile.
 type Profile struct {
-	Host         string `yaml:"host"`
-	Port         string `yaml:"port"`
-	ClientID     string `yaml:"client_id,omitempty"`
-	ClientSecret string `yaml:"client_secret,omitempty"`
-	AccessToken  string `yaml:"access_token,omitempty"`
-	RefreshToken string `yaml:"refresh_token,omitempty"`
-	Expiration   string `yaml:"expiration,omitempty"`
-	SSL          *bool  `yaml:"ssl,omitempty"`
-	VerifySSL    *bool  `yaml:"verify_ssl,omitempty"`
+	Host              string `yaml:"host"`
+	Port              string `yaml:"port"`
+	ClientID          string `yaml:"client_id,omitempty"`
+	ClientSecret      string `yaml:"client_secret,omitempty"`
+	AccessToken       string `yaml:"access_token,omitempty"`
+	RefreshToken      string `yaml:"refresh_token,omitempty"`
+	Expiration        string `yaml:"expiration,omitempty"`
+	RefreshExpiration string `yaml:"refresh_expiration,omitempty"`
+	SSL               *bool  `yaml:"ssl,omitempty"`
+	VerifySSL         *bool  `yaml:"verify_ssl,omitempty"`
 }
 
 // Config represents the structure of the config file.

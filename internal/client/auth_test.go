@@ -25,6 +25,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/looker-open-source/looker-cli/internal/config"
 )
 
 func TestTokenStorage(t *testing.T) {
@@ -114,6 +116,11 @@ func TestTokenStorage_Expired(t *testing.T) {
 	_, err = GetToken(host, "")
 	if err == nil {
 		t.Errorf("expected error for expired token")
+	}
+
+	// Verify expired token was deleted from token file
+	if _, err := GetTokenEntry(host, ""); err == nil {
+		t.Errorf("expected expired token to be deleted from token file")
 	}
 }
 
@@ -271,4 +278,222 @@ func TestPerformOAuthLogin_StdinFallback(t *testing.T) {
 	}
 }
 
+func TestNewClient_DeletesExpiredTokens(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "looker_cli_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
+	origHome := os.Getenv("HOME")
+	defer func() { _ = os.Setenv("HOME", origHome) }()
+	_ = os.Setenv("HOME", tmpDir)
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	origOverride := config.ConfigPathOverride
+	config.ConfigPathOverride = configPath
+	defer func() { config.ConfigPathOverride = origOverride }()
+
+	host := "test.looker.com"
+	exp := time.Now().Add(-10 * time.Minute)
+
+	t.Run("Expired profile token without client credentials is deleted and returns error", func(t *testing.T) {
+		cfg := &config.Config{
+			Default: "prof1",
+			Profiles: map[string]config.Profile{
+				"prof1": {
+					Host:        host,
+					Port:        "19999",
+					AccessToken: "expired_tok",
+					Expiration:  exp.Format(TimeFormat),
+				},
+			},
+		}
+		if err := cfg.Save(); err != nil {
+			t.Fatalf("failed to save config: %v", err)
+		}
+
+		_, err := NewClient(context.Background(), host, "19999", "", "", "", "", true, true, false, false, "prof1")
+		if err == nil {
+			t.Fatalf("expected error for expired profile token without fallback credentials")
+		}
+
+		loadedCfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("failed to load config: %v", err)
+		}
+		if loadedCfg.Profiles["prof1"].AccessToken != "" || loadedCfg.Profiles["prof1"].Expiration != "" {
+			t.Errorf("expected expired profile token to be deleted, got %+v", loadedCfg.Profiles["prof1"])
+		}
+	})
+
+	t.Run("Expired profile token with client credentials is deleted and falls back to client credentials", func(t *testing.T) {
+		cfg := &config.Config{
+			Default: "prof1",
+			Profiles: map[string]config.Profile{
+				"prof1": {
+					Host:         host,
+					Port:         "19999",
+					ClientID:     "my_id",
+					ClientSecret: "my_secret",
+					AccessToken:  "expired_tok",
+					Expiration:   exp.Format(TimeFormat),
+				},
+			},
+		}
+		if err := cfg.Save(); err != nil {
+			t.Fatalf("failed to save config: %v", err)
+		}
+
+		wrapper, err := NewClient(context.Background(), host, "19999", "my_id", "my_secret", "", "", true, true, false, false, "prof1")
+		if err != nil {
+			t.Fatalf("expected fallback to client credentials to succeed, got error: %v", err)
+		}
+		if wrapper.Session.Config.Headers["Authorization"] != "" {
+			t.Errorf("expected expired token not to be set in Authorization header, got %q", wrapper.Session.Config.Headers["Authorization"])
+		}
+
+		loadedCfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("failed to load config: %v", err)
+		}
+		if loadedCfg.Profiles["prof1"].AccessToken != "" || loadedCfg.Profiles["prof1"].Expiration != "" {
+			t.Errorf("expected expired profile token to be deleted, got %+v", loadedCfg.Profiles["prof1"])
+		}
+	})
+
+	t.Run("Expired token in token file is deleted", func(t *testing.T) {
+		if err := StoreToken(host, "", "expired_file_tok", "", "", exp); err != nil {
+			t.Fatalf("StoreToken failed: %v", err)
+		}
+
+		_, err := NewClient(context.Background(), host, "19999", "", "", "", "", true, true, false, true, "")
+		if err == nil {
+			t.Fatalf("expected error for expired token in token file")
+		}
+
+		if _, err := GetTokenEntry(host, ""); err == nil {
+			t.Errorf("expected expired token entry to be deleted from token file")
+		}
+	})
+
+	t.Run("Expired refresh token (>30 days) in profile is deleted without attempting refresh", func(t *testing.T) {
+		expired31DaysAgo := time.Now().Add(-31 * 24 * time.Hour)
+		cfg := &config.Config{
+			Default: "prof1",
+			Profiles: map[string]config.Profile{
+				"prof1": {
+					Host:              host,
+					Port:              "19999",
+					AccessToken:       "expired_tok",
+					RefreshToken:      "expired_ref_tok",
+					Expiration:        exp.Format(TimeFormat),
+					RefreshExpiration: expired31DaysAgo.Add(RefreshTokenDuration).Format(TimeFormat),
+				},
+			},
+		}
+		if err := cfg.Save(); err != nil {
+			t.Fatalf("failed to save config: %v", err)
+		}
+
+		_, err := NewClient(context.Background(), host, "19999", "", "", "", "", true, true, false, false, "prof1")
+		if err == nil {
+			t.Fatalf("expected error when both token and refresh token are expired")
+		}
+
+		loadedCfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("failed to load config: %v", err)
+		}
+		p := loadedCfg.Profiles["prof1"]
+		if p.AccessToken != "" || p.RefreshToken != "" || p.Expiration != "" || p.RefreshExpiration != "" {
+			t.Errorf("expected expired profile token and refresh token to be deleted, got %+v", p)
+		}
+	})
+
+	t.Run("Expired refresh token (>30 days) in token file is deleted", func(t *testing.T) {
+		expired31DaysAgo := time.Now().Add(-31 * 24 * time.Hour)
+		if err := StoreToken(host, "", "expired_file_tok", "expired_file_ref_tok", "cid", expired31DaysAgo); err != nil {
+			t.Fatalf("StoreToken failed: %v", err)
+		}
+
+		_, err := NewClient(context.Background(), host, "19999", "", "", "", "", true, true, false, true, "")
+		if err == nil {
+			t.Fatalf("expected error when both token and refresh token in token file are expired")
+		}
+
+		if _, err := GetTokenEntry(host, ""); err == nil {
+			t.Errorf("expected expired token and refresh token entry to be deleted from token file")
+		}
+	})
+}
+
+func TestNewClient_UnauthorizedDeletesStoredToken(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "looker_cli_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	origHome := os.Getenv("HOME")
+	defer func() { _ = os.Setenv("HOME", origHome) }()
+	_ = os.Setenv("HOME", tmpDir)
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	origOverride := config.ConfigPathOverride
+	config.ConfigPathOverride = configPath
+	defer func() { config.ConfigPathOverride = origOverride }()
+
+	mockLooker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"Requires authentication."}`))
+	}))
+	defer mockLooker.Close()
+
+	u, err := url.Parse(mockLooker.URL)
+	if err != nil {
+		t.Fatalf("failed to parse mock server url: %v", err)
+	}
+	host := u.Hostname()
+	port := u.Port()
+	exp := time.Now().Add(1 * time.Hour)
+
+	cfg := &config.Config{
+		Default: "prof1",
+		Profiles: map[string]config.Profile{
+			"prof1": {
+				Host:        host,
+				Port:        port,
+				AccessToken: "server_timed_out_tok",
+				Expiration:  exp.Format(TimeFormat),
+			},
+		},
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("failed to save config: %v", err)
+	}
+	if err := StoreToken(host, "", "server_timed_out_tok", "", "", exp); err != nil {
+		t.Fatalf("StoreToken failed: %v", err)
+	}
+
+	wrapper, err := NewClient(context.Background(), host, port, "", "", "", "", false, false, false, true, "prof1")
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	_, err = wrapper.SDK.Me("", nil)
+	if err == nil {
+		t.Fatalf("expected 401 error from SDK.Me")
+	}
+
+	loadedCfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+	if loadedCfg.Profiles["prof1"].AccessToken != "" || loadedCfg.Profiles["prof1"].Expiration != "" {
+		t.Errorf("expected profile token to be deleted after 401, got %+v", loadedCfg.Profiles["prof1"])
+	}
+	if _, err := GetTokenEntry(host, ""); err == nil {
+		t.Errorf("expected token file entry to be deleted after 401")
+	}
+}
