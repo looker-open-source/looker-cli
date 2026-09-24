@@ -209,7 +209,7 @@ jobs:
             ]
           }
           HERE
-          ./looker-cli model import Model_faa.json --token-file
+          ./looker-cli model import Model_faa.json --token-file --force
 
       - name: run a query against the model
         run: |
