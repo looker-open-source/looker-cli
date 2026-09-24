@@ -79,7 +79,19 @@ var MockSDK *v4.LookerSDK
 
 func initClient(ctx context.Context, oauth bool) (*client.ClientWrapper, error) {
 	if MockSDK != nil {
-		return &client.ClientWrapper{SDK: MockSDK, Host: cfgHost, SuUser: cfgSuUser}, nil
+		activeProfile := cfgProfile
+		host := cfgHost
+		if cfg, err := config.Load(); err == nil && cfg != nil {
+			if activeProfile == "" {
+				activeProfile = cfg.Default
+			}
+			if activeProfile != "" {
+				if p, ok := cfg.Profiles[activeProfile]; ok && !RootCmd.PersistentFlags().Lookup("host").Changed && p.Host != "" {
+					host = p.Host
+				}
+			}
+		}
+		return &client.ClientWrapper{SDK: MockSDK, Host: host, SuUser: cfgSuUser, ActiveProfile: activeProfile}, nil
 	}
 
 	cfg, err := config.Load()

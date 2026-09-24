@@ -16,9 +16,11 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
-	"github.com/spf13/cobra"
+	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/config"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -105,15 +107,21 @@ var profileAddCmd = &cobra.Command{
 			verifySSL = &val
 		}
 
+		refreshExp := ""
+		if profRefreshToken != "" {
+			refreshExp = time.Now().Add(client.RefreshTokenDuration).Format(client.TimeFormat)
+		}
+
 		prof := config.Profile{
-			Host:         profHost,
-			Port:         profPort,
-			ClientID:     profClientID,
-			ClientSecret: profClientSecret,
-			AccessToken:  profToken,
-			RefreshToken: profRefreshToken,
-			SSL:          ssl,
-			VerifySSL:    verifySSL,
+			Host:              profHost,
+			Port:              profPort,
+			ClientID:          profClientID,
+			ClientSecret:      profClientSecret,
+			AccessToken:       profToken,
+			RefreshToken:      profRefreshToken,
+			RefreshExpiration: refreshExp,
+			SSL:               ssl,
+			VerifySSL:         verifySSL,
 		}
 
 		cfg.Profiles[name] = prof
