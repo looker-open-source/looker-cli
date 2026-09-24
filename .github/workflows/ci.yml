@@ -19,8 +19,7 @@ jobs:
 
   test:
     name: Test - Looker.${{ matrix.looker }} / Go.${{ matrix.go-version }}
-    runs-on:
-      group: large-ubuntu
+    runs-on: ubuntu-latest
     needs: setup
     strategy:
       matrix:
