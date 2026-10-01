@@ -23,15 +23,17 @@ import (
 )
 
 const (
-	tokenFileName = ".looker_auth"
-	TimeFormat    = "2006-01-02 15:04:05 -0700"
+	tokenFileName        = ".looker_auth"
+	TimeFormat           = "2006-01-02 15:04:05 -0700"
+	RefreshTokenDuration = 30 * 24 * time.Hour
 )
 
 type TokenEntry struct {
-	Token        string `json:"token"`
-	Expiration   string `json:"expiration"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	ClientID     string `json:"client_id,omitempty"`
+	Token             string `json:"token"`
+	Expiration        string `json:"expiration"`
+	RefreshToken      string `json:"refresh_token,omitempty"`
+	RefreshExpiration string `json:"refresh_expiration,omitempty"`
+	ClientID          string `json:"client_id,omitempty"`
 }
 
 type HostTokens map[string]TokenEntry
@@ -132,14 +134,65 @@ func GetToken(host, suUser string) (string, error) {
 
 	exp, err := time.Parse(TimeFormat, entry.Expiration)
 	if err != nil {
+		_ = DeleteToken(host, suUser)
 		return "", fmt.Errorf("failed to parse expiration time %s: %w", entry.Expiration, err)
 	}
 
 	if time.Now().After(exp.Add(-5 * time.Minute)) {
+		_ = DeleteToken(host, suUser)
 		return "", fmt.Errorf("token expired or expiring soon (at %s)", entry.Expiration)
 	}
 
 	return entry.Token, nil
+}
+
+func DeleteToken(host, suUser string) error {
+	data, err := ReadTokenData()
+	if err != nil {
+		return err
+	}
+	if data == nil {
+		return nil
+	}
+
+	hostTokens, ok := data[host]
+	if !ok {
+		return nil
+	}
+
+	key := "default"
+	if suUser != "" {
+		key = suUser
+	}
+
+	if _, exists := hostTokens[key]; !exists {
+		return nil
+	}
+
+	delete(hostTokens, key)
+	if len(hostTokens) == 0 {
+		delete(data, host)
+	}
+
+	return WriteTokenData(data)
+}
+
+func IsRefreshTokenExpired(refreshExpiration, accessExpiration string) bool {
+	if refreshExpiration != "" {
+		refExp, err := time.Parse(TimeFormat, refreshExpiration)
+		if err != nil {
+			return true
+		}
+		return time.Now().After(refExp.Add(-5 * time.Minute))
+	}
+	if accessExpiration != "" {
+		exp, err := time.Parse(TimeFormat, accessExpiration)
+		if err != nil {
+			return true
+		}
+		return time.Now().After(exp.Add(RefreshTokenDuration - 5*time.Minute))
+	}
+	return false
 }
 
 func StoreToken(host, suUser, token, refreshToken, clientID string, expiration time.Time) error {
@@ -162,11 +215,25 @@ func StoreToken(host, suUser, token, refreshToken, clientID string, expiration t
 		key = suUser
 	}
 
+	refreshExpStr := ""
+	if refreshToken != "" {
+		if existing, exists := hostTokens[key]; exists && existing.RefreshToken == refreshToken && existing.RefreshExpiration != "" {
+			refreshExpStr = existing.RefreshExpiration
+		} else {
+			baseTime := time.Now()
+			if expiration.Before(baseTime) {
+				baseTime = expiration
+			}
+			refreshExpStr = baseTime.Add(RefreshTokenDuration).Format(TimeFormat)
+		}
+	}
+
 	hostTokens[key] = TokenEntry{
-		Token:        token,
-		Expiration:   expiration.Format(TimeFormat),
-		RefreshToken: refreshToken,
-		ClientID:     clientID,
+		Token:             token,
+		Expiration:        expiration.Format(TimeFormat),
+		RefreshToken:      refreshToken,
+		RefreshExpiration: refreshExpStr,
+		ClientID:          clientID,
 	}
 
 	return WriteTokenData(data)

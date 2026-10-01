@@ -5,13 +5,14 @@ on:
     branches:
       - main # Or your default branch
 
-permissions:
-  contents: write
-  pull-requests: write # Required for release-please to open PRs
+permissions: {}
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write # Required for release-please to open PRs
     # Map the outputs from the step so the next job can read them
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -19,7 +20,7 @@ jobs:
     steps:
       - name: Run release-please
         id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         with:
           token: ${{ secrets.LOS_AUTO_BOT_RP_TOKEN }}
           config-file: release-please-config.json
@@ -30,22 +31,26 @@ jobs:
     # ONLY run this job if release-please just merged the PR and created a release
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           # CRITICAL: We must checkout the exact tag created by release-please,
           # otherwise GoReleaser will fail to map the build to the correct version.
           ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: 'stable'
+          cache: false
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v5
+        uses: goreleaser/goreleaser-action@5742e2a039330cbb23ebf35f046f814d4c6ff811 # v5
         with:
           version: latest
           args: release --clean

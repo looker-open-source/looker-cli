@@ -54,15 +54,18 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 	baseURL := fmt.Sprintf("%s://%s", scheme, apiHost)
 
 	settings := rtl.ApiSettings{
-		BaseUrl:   baseURL,
-		VerifySsl: verifySSL,
-		Timeout:   120,
-		AgentTag:  UserAgent,
-		Headers:   make(map[string]string),
+		BaseUrl:    baseURL,
+		ApiVersion: "4.0",
+		VerifySsl:  verifySSL,
+		Timeout:    120,
+		AgentTag:   UserAgent,
+		Headers:    make(map[string]string),
 	}
 	settings.Headers["User-Agent"] = UserAgent
 
 	var activeToken string
+	var expiredErr error
+	tokenFromStorage := false
 	activeClientID := clientID
 	activeClientSecret := clientSecret
 
@@ -76,15 +79,25 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 
 	if token != "" {
 		activeToken = token
-	} else if activeProfile != "" && prof.AccessToken != "" && !oauth {
-		activeToken = prof.AccessToken
-		expired := false
+	} else if activeProfile != "" && (prof.AccessToken != "" || prof.RefreshToken != "") && !oauth {
+		expired := prof.AccessToken == ""
 		if prof.Expiration != "" {
 			exp, err := time.Parse(TimeFormat, prof.Expiration)
 			if err != nil {
 				expired = true
 			} else if time.Now().After(exp.Add(-5 * time.Minute)) {
 				expired = true
+			}
+		}
+
+		refreshExpired := false
+		if prof.RefreshToken != "" && IsRefreshTokenExpired(prof.RefreshExpiration, prof.Expiration) {
+			refreshExpired = true
+			prof.RefreshToken = ""
+			prof.RefreshExpiration = ""
+			if cfg, err := config.Load(); err == nil {
+				cfg.Profiles[activeProfile] = prof
+				_ = cfg.Save()
 			}
 		}
 
@@ -95,6 +108,9 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 			}
 			tok, refTok, newExp, err := RefreshOAuthToken(ctx, host, port, cID, prof.RefreshToken, ssl)
 			if err == nil {
+				if refTok != prof.RefreshToken || prof.RefreshExpiration == "" {
+					prof.RefreshExpiration = time.Now().Add(RefreshTokenDuration).Format(TimeFormat)
+				}
 				prof.AccessToken = tok
 				prof.RefreshToken = refTok
 				prof.Expiration = newExp.Format(TimeFormat)
@@ -103,15 +119,36 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 					_ = cfg.Save()
 				}
 				activeToken = tok
+				tokenFromStorage = true
 			} else {
-				return nil, fmt.Errorf("token expired and refresh failed: %w", err)
+				ClearProfileToken(activeProfile)
+				expiredErr = fmt.Errorf("token expired and refresh failed: %w", err)
 			}
 		} else if expired {
-			return nil, fmt.Errorf("token expired and cannot be refreshed (no refresh token found)")
+			ClearProfileToken(activeProfile)
+			if refreshExpired {
+				expiredErr = fmt.Errorf("token and refresh token expired")
+			} else {
+				expiredErr = fmt.Errorf("token expired and cannot be refreshed (no refresh token found)")
+			}
+		} else {
+			activeToken = prof.AccessToken
+			tokenFromStorage = true
 		}
-	} else if tokenFile && !oauth {
-		entry, err := GetTokenEntry(host, suUser)
+	}
+
+	if activeToken == "" && tokenFile && !oauth {
+		tokenUser := suUser
+		entry, err := GetTokenEntry(host, tokenUser)
+		if err == nil && suUser != "" {
+			exp, parseErr := time.Parse(TimeFormat, entry.Expiration)
+			if parseErr != nil || time.Now().After(exp.Add(-5*time.Minute)) {
+				_ = DeleteToken(host, suUser)
+				err = fmt.Errorf("su token expired")
+			}
+		}
 		if err != nil && suUser != "" {
+			tokenUser = ""
 			entry, err = GetTokenEntry(host, "")
 		}
 		if err != nil {
@@ -119,11 +156,18 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		}
 
 		exp, err := time.Parse(TimeFormat, entry.Expiration)
-		expired := false
+		expired := entry.Token == ""
 		if err != nil {
 			expired = true
 		} else if time.Now().After(exp.Add(-5 * time.Minute)) {
 			expired = true
+		}
+
+		refreshExpired := false
+		if entry.RefreshToken != "" && IsRefreshTokenExpired(entry.RefreshExpiration, entry.Expiration) {
+			refreshExpired = true
+			entry.RefreshToken = ""
+			entry.RefreshExpiration = ""
 		}
 
 		if expired && entry.RefreshToken != "" {
@@ -133,15 +177,40 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 			}
 			tok, refTok, newExp, err := RefreshOAuthToken(ctx, host, port, cID, entry.RefreshToken, ssl)
 			if err == nil {
-				_ = StoreToken(host, suUser, tok, refTok, cID, newExp)
+				_ = StoreToken(host, tokenUser, tok, refTok, cID, newExp)
 				activeToken = tok
+				tokenFromStorage = true
 			} else {
-				return nil, fmt.Errorf("token expired and refresh failed: %w", err)
+				_ = DeleteToken(host, tokenUser)
+				expiredErr = fmt.Errorf("token expired and refresh failed: %w", err)
 			}
 		} else if expired {
-			return nil, fmt.Errorf("token expired and cannot be refreshed (no refresh token found)")
+			_ = DeleteToken(host, tokenUser)
+			if refreshExpired {
+				expiredErr = fmt.Errorf("token and refresh token expired")
+			} else {
+				expiredErr = fmt.Errorf("token expired and cannot be refreshed (no refresh token found)")
+			}
 		} else {
+			if refreshExpired {
+				_ = StoreToken(host, tokenUser, entry.Token, "", entry.ClientID, exp)
+			}
 			activeToken = entry.Token
+			tokenFromStorage = true
+		}
+	}
+
+	if activeClientID == "" || activeClientSecret == "" {
+		cID, cSec, err := GetNetrcCredentials(host)
+		if err == nil && cID != "" && cSec != "" {
+			activeClientID = cID
+			activeClientSecret = cSec
+		} else {
+			envSettings, _ := rtl.NewSettingsFromEnv()
+			if envSettings.ClientId != "" && envSettings.ClientSecret != "" {
+				activeClientID = envSettings.ClientId
+				activeClientSecret = envSettings.ClientSecret
+			}
 		}
 	}
 
@@ -150,6 +219,10 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 			activeToken = "Bearer " + activeToken
 		}
 		settings.Headers["Authorization"] = activeToken
+		if activeClientID != "" && activeClientSecret != "" {
+			settings.ClientId = activeClientID
+			settings.ClientSecret = activeClientSecret
+		}
 	} else if oauth {
 		cID := activeClientID
 		if cID == "" {
@@ -160,12 +233,18 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 			return nil, fmt.Errorf("oauth login failed: %w", err)
 		}
 		activeToken = tok
+		tokenFromStorage = true
 		if activeProfile != "" {
 			if cfg, err := config.Load(); err == nil {
 				p := cfg.Profiles[activeProfile]
 				p.AccessToken = tok
 				p.RefreshToken = refTok
 				p.Expiration = exp.Format(TimeFormat)
+				if refTok != "" {
+					p.RefreshExpiration = time.Now().Add(RefreshTokenDuration).Format(TimeFormat)
+				} else {
+					p.RefreshExpiration = ""
+				}
 				cfg.Profiles[activeProfile] = p
 				_ = cfg.Save()
 			}
@@ -177,23 +256,11 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		}
 		settings.Headers["Authorization"] = activeToken
 	} else {
-		if activeClientID == "" || activeClientSecret == "" {
-			cID, cSec, err := GetNetrcCredentials(host)
-			if err == nil && cID != "" && cSec != "" {
-				activeClientID = cID
-				activeClientSecret = cSec
-			} else {
-				envSettings, _ := rtl.NewSettingsFromEnv()
-				if envSettings.ClientId != "" && envSettings.ClientSecret != "" {
-					activeClientID = envSettings.ClientId
-					activeClientSecret = envSettings.ClientSecret
-				}
-			}
-		}
-
 		if activeClientID != "" && activeClientSecret != "" {
 			settings.ClientId = activeClientID
 			settings.ClientSecret = activeClientSecret
+		} else if expiredErr != nil {
+			return nil, expiredErr
 		} else {
 			return nil, fmt.Errorf("auth required: must provide token, oauth, netrc, or client_id/secret")
 		}
@@ -210,9 +277,30 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		}
 
 		if oauth2Trans, ok := session.Client.Transport.(*oauth2.Transport); ok {
+			var fallbackSource oauth2.TokenSource
+			if settings.ClientId != "" && settings.ClientSecret != "" {
+				fallbackSource = oauth2Trans.Source
+			}
 			oauth2Trans.Source = oauth2.StaticTokenSource(&oauth2.Token{
 				AccessToken: rawToken,
 			})
+			if tokenFromStorage {
+				oauth2Trans.Base = &tokenCleanupTransport{
+					base:           oauth2Trans.Base,
+					oauth2Trans:    oauth2Trans,
+					session:        session,
+					fallbackSource: fallbackSource,
+					onUnauthorized: func() {
+						if activeProfile != "" {
+							ClearProfileToken(activeProfile)
+						}
+						_ = DeleteToken(host, suUser)
+						if suUser != "" {
+							_ = DeleteToken(host, "")
+						}
+					},
+				}
+			}
 		}
 	}
 
@@ -239,12 +327,77 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 
 			suTok := "Bearer " + *suTokResp.AccessToken
 			session.Config.Headers["Authorization"] = suTok
+			if oauth2Trans, ok := session.Client.Transport.(*oauth2.Transport); ok {
+				oauth2Trans.Source = oauth2.StaticTokenSource(&oauth2.Token{
+					AccessToken: *suTokResp.AccessToken,
+				})
+			}
 			exp := time.Now().Add(time.Duration(*suTokResp.ExpiresIn) * time.Second)
 			_ = StoreToken(host, suUser, *suTokResp.AccessToken, "", "", exp)
 		}
 	}
 
 	return wrapper, nil
+}
+
+type tokenCleanupTransport struct {
+	base           http.RoundTripper
+	oauth2Trans    *oauth2.Transport
+	session        *rtl.AuthSession
+	fallbackSource oauth2.TokenSource
+	onUnauthorized func()
+	retried        bool
+}
+
+func (t *tokenCleanupTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err == nil && resp != nil && resp.StatusCode == http.StatusUnauthorized {
+		if t.onUnauthorized != nil {
+			t.onUnauthorized()
+		}
+		if t.session != nil && t.session.Config.Headers != nil {
+			delete(t.session.Config.Headers, "Authorization")
+		}
+		if t.fallbackSource != nil && !t.retried {
+			t.retried = true
+			if t.oauth2Trans != nil {
+				t.oauth2Trans.Source = t.fallbackSource
+			}
+			if req.Body == nil || req.GetBody != nil {
+				if tok, tokErr := t.fallbackSource.Token(); tokErr == nil {
+					_ = resp.Body.Close()
+					retryReq := req.Clone(req.Context())
+					if req.Body != nil && req.GetBody != nil {
+						if body, bodyErr := req.GetBody(); bodyErr == nil {
+							retryReq.Body = body
+						}
+					}
+					retryReq.Header.Set("Authorization", "Bearer "+tok.AccessToken)
+					return t.base.RoundTrip(retryReq)
+				}
+			}
+		}
+	}
+	return resp, err
+}
+
+// ClearProfileToken deletes any stored auth token from the specified profile in config.yaml.
+func ClearProfileToken(activeProfile string) {
+	if activeProfile == "" {
+		return
+	}
+	if cfg, err := config.Load(); err == nil && cfg != nil {
+		if prof, ok := cfg.Profiles[activeProfile]; ok {
+			if prof.AccessToken != "" || prof.RefreshToken != "" || prof.Expiration != "" || prof.RefreshExpiration != "" {
+				prof.AccessToken = ""
+				prof.RefreshToken = ""
+				prof.Expiration = ""
+				prof.RefreshExpiration = ""
+				cfg.Profiles[activeProfile] = prof
+				_ = cfg.Save()
+			}
+		}
+	}
 }
 
 // ExplicitLogin performs explicit API login to get token details for 'session login'.
@@ -260,9 +413,15 @@ func (c *ClientWrapper) ExplicitLogin(clientID, clientSecret string) (string, ti
 	return *resp.AccessToken, exp, nil
 }
 
-// Logout explicitly logs out.
+// Logout explicitly logs out and deletes any stored auth token.
 func (c *ClientWrapper) Logout() error {
 	_, err := c.SDK.Logout(nil)
+	if c.ActiveProfile != "" {
+		ClearProfileToken(c.ActiveProfile)
+	}
+	if c.Host != "" {
+		_ = DeleteToken(c.Host, c.SuUser)
+	}
 	return err
 }
 

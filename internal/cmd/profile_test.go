@@ -22,8 +22,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/config"
+	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 )
 
 func setupTempConfig(t *testing.T) string {
@@ -386,3 +389,64 @@ func TestInitClient_Profile(t *testing.T) {
 		}
 	})
 }
+
+func TestSessionLogout_DeletesTokens(t *testing.T) {
+	tmpDir := setupTempConfig(t)
+	defer teardownTempConfig(t, tmpDir)
+
+	origHome := os.Getenv("HOME")
+	defer func() { _ = os.Setenv("HOME", origHome) }()
+	_ = os.Setenv("HOME", tmpDir)
+
+	mockDoer := &statefulMockDoer{t: t}
+	MockSDK = v4.NewLookerSDK(mockDoer)
+	defer func() { MockSDK = nil }()
+
+	exp := time.Now().Add(1 * time.Hour)
+	cfg := &config.Config{
+		Default: "prof1",
+		Profiles: map[string]config.Profile{
+			"prof1": {
+				Host:         "profile-host.com",
+				Port:         "1234",
+				ClientID:     "prof-id",
+				ClientSecret: "prof-sec",
+				AccessToken:  "session_tok_123",
+				RefreshToken: "refresh_tok_456",
+				Expiration:   exp.Format(client.TimeFormat),
+			},
+		},
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("failed to save config: %v", err)
+	}
+
+	if err := client.StoreToken("profile-host.com", "", "file_tok_123", "file_refresh_456", "prof-id", exp); err != nil {
+		t.Fatalf("failed to store token in file: %v", err)
+	}
+
+	out, err := executeCommand("session", "logout")
+	if err != nil {
+		t.Fatalf("session logout failed: %v", err)
+	}
+	if !strings.Contains(out, "Logged out.") {
+		t.Errorf("expected 'Logged out.', got %q", out)
+	}
+
+	loadedCfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+	prof := loadedCfg.Profiles["prof1"]
+	if prof.AccessToken != "" || prof.RefreshToken != "" || prof.Expiration != "" {
+		t.Errorf("expected profile auth token fields to be cleared after logout, got %+v", prof)
+	}
+	if prof.ClientID != "prof-id" || prof.ClientSecret != "prof-sec" {
+		t.Errorf("expected profile client credentials to be preserved, got %+v", prof)
+	}
+
+	if _, err := client.GetTokenEntry("profile-host.com", ""); err == nil {
+		t.Errorf("expected token in token file to be deleted after logout")
+	}
+}
+

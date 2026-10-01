@@ -93,7 +93,7 @@ var sessionLoginCmd = &cobra.Command{
 				return fmt.Errorf("failed to store token in profile: %w", err)
 			}
 		} else {
-			err = client.StoreToken(cfgHost, cfgSuUser, tok, "", "", exp)
+			err = client.StoreToken(c.Host, c.SuUser, tok, "", "", exp)
 			if err != nil {
 				return fmt.Errorf("failed to store token: %w", err)
 			}
@@ -109,27 +109,53 @@ var sessionLogoutCmd = &cobra.Command{
 	Short: "End a persistent session",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		c, err := initClient(ctx, false)
-		if err != nil {
-			return err
+
+		activeProfile := cfgProfile
+		host := cfgHost
+		if cfg, cfgErr := config.Load(); cfgErr == nil && cfg != nil {
+			if activeProfile == "" {
+				activeProfile = cfg.Default
+			}
+			if activeProfile != "" {
+				if p, ok := cfg.Profiles[activeProfile]; ok && !RootCmd.PersistentFlags().Lookup("host").Changed && p.Host != "" {
+					host = p.Host
+				}
+			}
 		}
 
-		_ = c.Logout()
-
-		// Remove from token file
-		data, err := client.ReadTokenData()
-		if err == nil && data != nil {
-			if hostTokens, ok := data[cfgHost]; ok {
-				key := "default"
-				if cfgSuUser != "" {
-					key = cfgSuUser
+		origTokenFile := cfgTokenFile
+		if !cfgTokenFile {
+			if _, tokErr := client.GetTokenEntry(host, cfgSuUser); tokErr == nil {
+				cfgTokenFile = true
+			} else if cfgSuUser != "" {
+				if _, tokErr := client.GetTokenEntry(host, ""); tokErr == nil {
+					cfgTokenFile = true
 				}
-				delete(hostTokens, key)
-				if len(hostTokens) == 0 {
-					delete(data, cfgHost)
-				}
-				_ = client.WriteTokenData(data)
 			}
+		}
+		defer func() { cfgTokenFile = origTokenFile }()
+
+		c, err := initClient(ctx, false)
+		if err == nil && c != nil {
+			_ = c.Logout()
+			if c.ActiveProfile != "" {
+				activeProfile = c.ActiveProfile
+			}
+			if c.Host != "" {
+				host = c.Host
+			}
+		}
+
+		if activeProfile != "" {
+			client.ClearProfileToken(activeProfile)
+		}
+		_ = client.DeleteToken(host, cfgSuUser)
+		if cfgHost != "" && cfgHost != host {
+			_ = client.DeleteToken(cfgHost, cfgSuUser)
+		}
+
+		if err != nil {
+			return err
 		}
 
 		fmt.Println("Logged out.")
