@@ -16,20 +16,17 @@ env:
 permissions: {}
 
 jobs:
-  setup:
-    uses: looker-open-source/reusable-actions/.github/workflows/supported-versions.yml@main # zizmor: ignore[unpinned-uses]
 
   test:
     name: Test - Looker.${{ matrix.looker }} / Go.${{ matrix.go-version }}
     runs-on: ubuntu-latest
-    needs: setup
     permissions:
       actions: write
       checks: write
       contents: read
     strategy:
       matrix:
-        looker: ${{ fromJson(needs.setup.outputs.matrix_json) }}
+        looker: ${{ fromJson(vars.SUPPORTED_LOOKER_VERSIONS) }}
         go-version: [1.26.2]
 
     steps:
