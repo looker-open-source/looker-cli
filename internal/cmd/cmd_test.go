@@ -2219,3 +2219,56 @@ func TestDashboardImportHiddenSlugConflict(t *testing.T) {
 		}
 	}
 }
+
+type headerCapturingDoer struct {
+	mockDoer
+	lastOptions *rtl.ApiSettings
+}
+
+func (h *headerCapturingDoer) Do(result interface{}, method, ver, path string, reqPars map[string]interface{}, body interface{}, options *rtl.ApiSettings) error {
+	h.lastOptions = options
+	return h.mockDoer.Do(result, method, ver, path, reqPars, body, options)
+}
+
+func TestHeaderFlags(t *testing.T) {
+	doer := &headerCapturingDoer{mockDoer: mockDoer{t: t}}
+	MockSDK = v4.NewLookerSDK(doer)
+	defer func() {
+		MockSDK = nil
+		cfgHeaders = nil
+		if f := RootCmd.PersistentFlags().Lookup("header"); f != nil {
+			f.Changed = false
+		}
+	}()
+
+	cfgHeaders = nil
+	RootCmd.SetArgs([]string{
+		"user", "me",
+		"-H", "X-Short-Header: short_val",
+		"--header", "X-Long-Header: val1, val2",
+	})
+	if err := RootCmd.Execute(); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if doer.lastOptions == nil || doer.lastOptions.Headers == nil {
+		t.Fatalf("expected options.Headers to be populated")
+	}
+	if got := doer.lastOptions.Headers["X-Short-Header"]; got != "short_val" {
+		t.Errorf("expected X-Short-Header='short_val', got %q", got)
+	}
+	if got := doer.lastOptions.Headers["X-Long-Header"]; got != "val1, val2" {
+		t.Errorf("expected X-Long-Header='val1, val2', got %q", got)
+	}
+
+	// Test invalid header format
+	cfgHeaders = nil
+	RootCmd.SetArgs([]string{
+		"user", "me",
+		"-H", "InvalidHeaderFormat",
+	})
+	if err := RootCmd.Execute(); err == nil {
+		t.Errorf("expected error for invalid header format, got nil")
+	}
+}
+

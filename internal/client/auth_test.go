@@ -503,3 +503,87 @@ func TestNewClient_UnauthorizedDeletesStoredToken(t *testing.T) {
 		t.Errorf("expected token file entry to be deleted after 401")
 	}
 }
+
+func TestParseHeaders(t *testing.T) {
+	headers, err := ParseHeaders([]string{
+		"X-First: one",
+		"X-Second: two:three",
+		"Accept: application/json, text/plain",
+	})
+	if err != nil {
+		t.Fatalf("ParseHeaders failed: %v", err)
+	}
+	if len(headers) != 3 {
+		t.Fatalf("expected 3 headers, got %d", len(headers))
+	}
+	if headers[0].Key != "X-First" || headers[0].Value != "one" {
+		t.Errorf("unexpected header[0]: %+v", headers[0])
+	}
+	if headers[1].Key != "X-Second" || headers[1].Value != "two:three" {
+		t.Errorf("unexpected header[1]: %+v", headers[1])
+	}
+	if headers[2].Key != "Accept" || headers[2].Value != "application/json, text/plain" {
+		t.Errorf("unexpected header[2]: %+v", headers[2])
+	}
+
+	if _, err := ParseHeaders([]string{"InvalidHeaderWithoutColon"}); err == nil {
+		t.Errorf("expected error for header without colon")
+	}
+	if _, err := ParseHeaders([]string{": EmptyKey"}); err == nil {
+		t.Errorf("expected error for header with empty key")
+	}
+}
+
+func TestNewClient_CustomHeaders(t *testing.T) {
+	var capturedHeaders http.Header
+	mockLooker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"1234","email":"test@example.com"}`))
+	}))
+	defer mockLooker.Close()
+
+	u, err := url.Parse(mockLooker.URL)
+	if err != nil {
+		t.Fatalf("failed to parse mock server url: %v", err)
+	}
+
+	wrapper, err := NewClient(
+		context.Background(),
+		u.Hostname(),
+		u.Port(),
+		"",
+		"",
+		"test_access_token",
+		"",
+		false,
+		false,
+		false,
+		false,
+		"",
+		"X-Custom-1: value1",
+		"X-Custom-2: value2, value3",
+		"X-Multi: first",
+		"X-Multi: second",
+	)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	if _, err := wrapper.SDK.Me("", nil); err != nil {
+		t.Fatalf("SDK.Me failed: %v", err)
+	}
+
+	if got := capturedHeaders.Get("X-Custom-1"); got != "value1" {
+		t.Errorf("expected X-Custom-1=value1, got %q", got)
+	}
+	if got := capturedHeaders.Get("X-Custom-2"); got != "value2, value3" {
+		t.Errorf("expected X-Custom-2='value2, value3', got %q", got)
+	}
+	multiVals := capturedHeaders.Values("X-Multi")
+	if len(multiVals) != 2 || multiVals[0] != "first" || multiVals[1] != "second" {
+		t.Errorf("expected X-Multi=[first, second], got %v", multiVals)
+	}
+}
+
