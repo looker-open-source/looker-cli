@@ -495,6 +495,9 @@ func executeApiCallGeneric(cmd *cobra.Command, method, pathTemplate string, path
 	if bodyReader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	for k, v := range c.Session.Config.Headers {
+		req.Header.Set(k, v)
+	}
 
 	if cfgDebug {
 		fmt.Printf("--> %s %s\n", method, u.String())

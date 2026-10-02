@@ -214,6 +214,7 @@ Every command accepts the following optional global parameters to customize conn
 | `--token-file` | Use access token stored in `~/.looker_auth` | `false` |
 | `--client-id` | API Client ID | `""` |
 | `--client-secret` | API Client Secret | `""` |
+| `--header`, `-H` | Custom header to pass in the API call (can be specified multiple times) | `[]` |
 | `--debug` | Enable verbose API logging | `false` |
 
 ---

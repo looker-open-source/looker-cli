@@ -63,7 +63,7 @@ func generatePKCE() (verifier, challenge string, err error) {
 }
 
 // PerformOAuthLogin initiates PKCE flow, opens browser, waits for callback, and exchanges code for token.
-func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl bool) (string, string, time.Time, error) {
+func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl bool, headers ...Header) (string, string, time.Time, error) {
 	verifier, challenge, err := generatePKCE()
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to generate PKCE: %w", err)
@@ -221,6 +221,7 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", UserAgent)
+		applyHeaders(req.Header, headers)
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -244,7 +245,7 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 
 
 // RefreshOAuthToken performs explicit OAuth2 refresh token grant to get a new short-lived access token.
-func RefreshOAuthToken(ctx context.Context, host, port, clientID, refreshToken string, ssl bool) (string, string, time.Time, error) {
+func RefreshOAuthToken(ctx context.Context, host, port, clientID, refreshToken string, ssl bool, headers ...Header) (string, string, time.Time, error) {
 	scheme := "https"
 	if !ssl {
 		scheme = "http"
@@ -269,6 +270,7 @@ func RefreshOAuthToken(ctx context.Context, host, port, clientID, refreshToken s
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", UserAgent)
+	applyHeaders(req.Header, headers)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

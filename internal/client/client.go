@@ -40,8 +40,46 @@ type ClientWrapper struct {
 
 var UserAgent = "looker-cli/unknown"
 
+// Header represents a parsed HTTP header key-value pair.
+type Header struct {
+	Key   string
+	Value string
+}
+
+// ParseHeaders parses a slice of "Key: Value" strings into Header structs.
+func ParseHeaders(rawHeaders []string) ([]Header, error) {
+	var parsed []Header
+	for _, raw := range rawHeaders {
+		k, v, ok := strings.Cut(raw, ":")
+		if !ok {
+			return nil, fmt.Errorf("invalid header %q: must be in 'Key: Value' format", raw)
+		}
+		k = strings.TrimSpace(k)
+		if k == "" {
+			return nil, fmt.Errorf("invalid header %q: header name cannot be empty", raw)
+		}
+		v = strings.TrimSpace(v)
+		parsed = append(parsed, Header{Key: k, Value: v})
+	}
+	return parsed, nil
+}
+
+func applyHeaders(h http.Header, headers []Header) {
+	for _, hdr := range headers {
+		h.Del(hdr.Key)
+	}
+	for _, hdr := range headers {
+		h.Add(hdr.Key, hdr.Value)
+	}
+}
+
 // NewClient initializes LookerSDK based on provided flags and auth mechanisms.
-func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, suUser string, ssl, verifySSL, oauth, tokenFile bool, activeProfile string) (*ClientWrapper, error) {
+func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, suUser string, ssl, verifySSL, oauth, tokenFile bool, activeProfile string, headers ...string) (*ClientWrapper, error) {
+	parsedHeaders, err := ParseHeaders(headers)
+	if err != nil {
+		return nil, err
+	}
+
 	scheme := "https"
 	if !ssl {
 		scheme = "http"
@@ -62,6 +100,13 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		Headers:    make(map[string]string),
 	}
 	settings.Headers["User-Agent"] = UserAgent
+
+	var customAuthHeader string
+	for _, h := range parsedHeaders {
+		if strings.EqualFold(h.Key, "Authorization") {
+			customAuthHeader = h.Value
+		}
+	}
 
 	var activeToken string
 	var expiredErr error
@@ -104,9 +149,9 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		if expired && prof.RefreshToken != "" {
 			cID := activeClientID
 			if cID == "" {
-				cID = determineOAuthClientID(ctx, host, port, ssl, verifySSL)
+				cID = determineOAuthClientID(ctx, host, port, ssl, verifySSL, parsedHeaders...)
 			}
-			tok, refTok, newExp, err := RefreshOAuthToken(ctx, host, port, cID, prof.RefreshToken, ssl)
+			tok, refTok, newExp, err := RefreshOAuthToken(ctx, host, port, cID, prof.RefreshToken, ssl, parsedHeaders...)
 			if err == nil {
 				if refTok != prof.RefreshToken || prof.RefreshExpiration == "" {
 					prof.RefreshExpiration = time.Now().Add(RefreshTokenDuration).Format(TimeFormat)
@@ -173,9 +218,9 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		if expired && entry.RefreshToken != "" {
 			cID := entry.ClientID
 			if cID == "" {
-				cID = determineOAuthClientID(ctx, host, port, ssl, verifySSL)
+				cID = determineOAuthClientID(ctx, host, port, ssl, verifySSL, parsedHeaders...)
 			}
-			tok, refTok, newExp, err := RefreshOAuthToken(ctx, host, port, cID, entry.RefreshToken, ssl)
+			tok, refTok, newExp, err := RefreshOAuthToken(ctx, host, port, cID, entry.RefreshToken, ssl, parsedHeaders...)
 			if err == nil {
 				_ = StoreToken(host, tokenUser, tok, refTok, cID, newExp)
 				activeToken = tok
@@ -214,6 +259,10 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		}
 	}
 
+	if activeToken == "" && customAuthHeader != "" && !oauth && (activeClientID == "" || activeClientSecret == "") {
+		activeToken = customAuthHeader
+	}
+
 	if activeToken != "" {
 		if !strings.HasPrefix(activeToken, "Bearer ") && !strings.HasPrefix(activeToken, "token ") {
 			activeToken = "Bearer " + activeToken
@@ -226,9 +275,9 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 	} else if oauth {
 		cID := activeClientID
 		if cID == "" {
-			cID = determineOAuthClientID(ctx, host, port, ssl, verifySSL)
+			cID = determineOAuthClientID(ctx, host, port, ssl, verifySSL, parsedHeaders...)
 		}
-		tok, refTok, exp, err := PerformOAuthLogin(ctx, host, port, cID, ssl)
+		tok, refTok, exp, err := PerformOAuthLogin(ctx, host, port, cID, ssl, parsedHeaders...)
 		if err != nil {
 			return nil, fmt.Errorf("oauth login failed: %w", err)
 		}
@@ -266,7 +315,25 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		}
 	}
 
-	session := rtl.NewAuthSession(settings)
+	for _, h := range parsedHeaders {
+		settings.Headers[h.Key] = h.Value
+	}
+
+	baseTransport := http.RoundTripper(&http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: !settings.VerifySsl,
+		},
+	})
+	var hdrTrans *headerTransport
+	if len(parsedHeaders) > 0 {
+		hdrTrans = &headerTransport{
+			base:    baseTransport,
+			headers: parsedHeaders,
+		}
+		baseTransport = hdrTrans
+	}
+
+	session := rtl.NewAuthSessionWithTransport(settings, baseTransport)
 
 	if activeToken != "" {
 		rawToken := activeToken
@@ -327,6 +394,15 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 
 			suTok := "Bearer " + *suTokResp.AccessToken
 			session.Config.Headers["Authorization"] = suTok
+			if hdrTrans != nil {
+				var filtered []Header
+				for _, h := range hdrTrans.headers {
+					if !strings.EqualFold(h.Key, "Authorization") {
+						filtered = append(filtered, h)
+					}
+				}
+				hdrTrans.headers = filtered
+			}
 			if oauth2Trans, ok := session.Client.Transport.(*oauth2.Transport); ok {
 				oauth2Trans.Source = oauth2.StaticTokenSource(&oauth2.Token{
 					AccessToken: *suTokResp.AccessToken,
@@ -338,6 +414,20 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 	}
 
 	return wrapper, nil
+}
+
+type headerTransport struct {
+	base    http.RoundTripper
+	headers []Header
+}
+
+func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if len(t.headers) == 0 {
+		return t.base.RoundTrip(req)
+	}
+	reqCopy := req.Clone(req.Context())
+	applyHeaders(reqCopy.Header, t.headers)
+	return t.base.RoundTrip(reqCopy)
 }
 
 type tokenCleanupTransport struct {
@@ -431,8 +521,8 @@ type swaggerInfo struct {
 	} `json:"info"`
 }
 
-func determineOAuthClientID(ctx context.Context, host, port string, ssl, verifySSL bool) string {
-	version, err := fetchLookerVersion(ctx, host, port, ssl, verifySSL)
+func determineOAuthClientID(ctx context.Context, host, port string, ssl, verifySSL bool, headers ...Header) string {
+	version, err := fetchLookerVersion(ctx, host, port, ssl, verifySSL, headers...)
 	if err != nil {
 		// Default fallback on failure
 		return "com.looker.cli"
@@ -443,7 +533,7 @@ func determineOAuthClientID(ctx context.Context, host, port string, ssl, verifyS
 	return "com.looker.cli"
 }
 
-func fetchLookerVersion(ctx context.Context, host, port string, ssl, verifySSL bool) (string, error) {
+func fetchLookerVersion(ctx context.Context, host, port string, ssl, verifySSL bool, headers ...Header) (string, error) {
 	scheme := "https"
 	if !ssl {
 		scheme = "http"
@@ -455,6 +545,7 @@ func fetchLookerVersion(ctx context.Context, host, port string, ssl, verifySSL b
 		return "", err
 	}
 	req.Header.Set("User-Agent", UserAgent)
+	applyHeaders(req.Header, headers)
 
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: !verifySSL},

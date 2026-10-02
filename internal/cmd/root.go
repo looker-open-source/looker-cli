@@ -22,6 +22,7 @@ import (
 
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/config"
+	rtl "github.com/looker-open-source/sdk-codegen/go/rtl"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/spf13/cobra"
 )
@@ -41,6 +42,7 @@ var (
 	cfgHTTPProxy    string
 	cfgForce        bool
 	cfgProfile      string
+	cfgHeaders      []string
 )
 
 var RootCmd = &cobra.Command{
@@ -71,13 +73,44 @@ func init() {
 	RootCmd.PersistentFlags().StringVar(&cfgHTTPProxy, "http-proxy", "", "HTTP Proxy for connecting to Looker host")
 	RootCmd.PersistentFlags().BoolVar(&cfgForce, "force", false, "Overwrite objects on server")
 	RootCmd.PersistentFlags().StringVar(&cfgProfile, "profile", "", "Use a specific profile from config.yaml")
+	RootCmd.PersistentFlags().StringArrayVarP(&cfgHeaders, "header", "H", nil, "Custom header to pass in the API call (can be specified multiple times)")
 
 	client.UserAgent = fmt.Sprintf("looker-cli %s", Version)
 }
 
 var MockSDK *v4.LookerSDK
 
+type headerDoer struct {
+	v4.AuthSessionDoer
+	headers map[string]string
+}
+
+func (h *headerDoer) Do(result interface{}, method, ver, path string, reqPars map[string]interface{}, body interface{}, options *rtl.ApiSettings) error {
+	if len(h.headers) > 0 {
+		if options == nil {
+			options = &rtl.ApiSettings{Headers: make(map[string]string, len(h.headers))}
+		} else {
+			cloned := *options
+			options = &cloned
+			newHeaders := make(map[string]string, len(options.Headers)+len(h.headers))
+			for k, v := range options.Headers {
+				newHeaders[k] = v
+			}
+			options.Headers = newHeaders
+		}
+		for k, v := range h.headers {
+			options.Headers[k] = v
+		}
+	}
+	return h.AuthSessionDoer.Do(result, method, ver, path, reqPars, body, options)
+}
+
 func initClient(ctx context.Context, oauth bool) (*client.ClientWrapper, error) {
+	parsedHeaders, err := client.ParseHeaders(cfgHeaders)
+	if err != nil {
+		return nil, err
+	}
+
 	if MockSDK != nil {
 		activeProfile := cfgProfile
 		host := cfgHost
@@ -91,7 +124,15 @@ func initClient(ctx context.Context, oauth bool) (*client.ClientWrapper, error) 
 				}
 			}
 		}
-		return &client.ClientWrapper{SDK: MockSDK, Host: host, SuUser: cfgSuUser, ActiveProfile: activeProfile}, nil
+		sdk := MockSDK
+		if len(parsedHeaders) > 0 {
+			headersMap := make(map[string]string, len(parsedHeaders))
+			for _, h := range parsedHeaders {
+				headersMap[h.Key] = h.Value
+			}
+			sdk = v4.NewLookerSDK(&headerDoer{AuthSessionDoer: MockSDK.AuthSession, headers: headersMap})
+		}
+		return &client.ClientWrapper{SDK: sdk, Host: host, SuUser: cfgSuUser, ActiveProfile: activeProfile}, nil
 	}
 
 	cfg, err := config.Load()
@@ -181,5 +222,6 @@ func initClient(ctx context.Context, oauth bool) (*client.ClientWrapper, error) 
 		oauth,
 		cfgTokenFile,
 		activeProfile,
+		cfgHeaders...,
 	)
 }
