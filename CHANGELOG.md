@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.9](https://github.com/looker-open-source/looker-cli/compare/v0.4.8...v0.4.9) (2026-10-02)
+
+
+### Features
+
+* add support to pass custom headers in api requests ([#312](https://github.com/looker-open-source/looker-cli/issues/312)) ([1284c6a](https://github.com/looker-open-source/looker-cli/commit/1284c6a5490724c1e1274e0ea7620378f8c93911))
+* support for 26.18 api ([#310](https://github.com/looker-open-source/looker-cli/issues/310)) ([3051528](https://github.com/looker-open-source/looker-cli/commit/30515284f469819bd3c07406e1d87f308cef2a75))
+
+
+### Bug Fixes
+
+* delete tokens on logout or after expiration ([#308](https://github.com/looker-open-source/looker-cli/issues/308)) ([8095d53](https://github.com/looker-open-source/looker-cli/commit/8095d53ae50f4b85132a1d467879ae291daf72d5))
+
 ## [0.4.8](https://github.com/looker-open-source/looker-cli/compare/v0.4.7...v0.4.8) (2026-07-14)
 
 
