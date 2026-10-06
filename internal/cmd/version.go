@@ -21,7 +21,7 @@ import (
 )
 
 // x-release-please-start-version
-const Version = "0.4.9"
+const Version = "0.4.10"
 // x-release-please-end
 
 var VersionCmd = &cobra.Command{
