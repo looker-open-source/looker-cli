@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.11](https://github.com/looker-open-source/looker-cli/compare/v0.4.10...v0.4.11) (2026-10-07)
+
+
+### Bug Fixes
+
+* handle dashboard elements with query inside result_maker ([#305](https://github.com/looker-open-source/looker-cli/issues/305)) ([#316](https://github.com/looker-open-source/looker-cli/issues/316)) ([4e5a660](https://github.com/looker-open-source/looker-cli/commit/4e5a6600e765b4810988524a5d2f84b520f06c66))
+* handle slug conflicts and strip read-only fields when overwriting dashboards ([#306](https://github.com/looker-open-source/looker-cli/issues/306)) ([#315](https://github.com/looker-open-source/looker-cli/issues/315)) ([5474086](https://github.com/looker-open-source/looker-cli/commit/5474086c03d5c0dd13414c73a4abd871624e36b3))
+
 ## [0.4.10](https://github.com/looker-open-source/looker-cli/compare/v0.4.9...v0.4.10) (2026-10-06)
 
 
