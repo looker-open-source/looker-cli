@@ -44,6 +44,7 @@ func (m *statefulMockDoer) Do(result interface{}, method, ver, path string, reqP
 	}
 	if method == "GET" && path == "/dashboards/search" {
 		var slug, title, folderID string
+		var wantDeleted bool
 		if s, ok := reqPars["slug"].(*string); ok && s != nil {
 			slug = *s
 		}
@@ -53,10 +54,17 @@ func (m *statefulMockDoer) Do(result interface{}, method, ver, path string, reqP
 		if f, ok := reqPars["folder_id"].(*string); ok && f != nil {
 			folderID = *f
 		}
+		if del, ok := reqPars["deleted"].(*string); ok && del != nil && *del == "true" {
+			wantDeleted = true
+		}
 
 		var results []v4.Dashboard
 		for _, d := range m.dashboards {
 			match := true
+			isDeleted := d.Deleted != nil && *d.Deleted
+			if isDeleted != wantDeleted {
+				match = false
+			}
 			if slug != "" && (d.Slug == nil || *d.Slug != slug) {
 				match = false
 			}
@@ -109,6 +117,22 @@ func (m *statefulMockDoer) Do(result interface{}, method, ver, path string, reqP
 		bodyBytes, _ := json.Marshal(body)
 		var wd v4.WriteDashboard
 		_ = json.Unmarshal(bodyBytes, &wd)
+
+		if wd.Folder != nil {
+			m.t.Errorf("Expected wd.Folder to be nil on UpdateDashboard")
+		}
+
+		if wd.Slug != nil && *wd.Slug == "conflicting_hidden_slug" {
+			return fmt.Errorf("response error. status=409 Conflict. error={\"message\":\"The resource already exists.\"}")
+		}
+
+		if wd.Slug != nil && *wd.Slug != "" {
+			for otherID, d := range m.dashboards {
+				if otherID != id && d.Slug != nil && *d.Slug == *wd.Slug {
+					return fmt.Errorf("response error. status=409 Conflict. error={\"message\":\"The resource already exists.\"}")
+				}
+			}
+		}
 
 		if d, ok := m.dashboards[id]; ok {
 			if wd.Title != nil {
@@ -2183,12 +2207,17 @@ func TestDashboardImportHiddenSlugConflict(t *testing.T) {
 	MockSDK = v4.NewLookerSDK(doer)
 	defer func() {
 		MockSDK = nil
+		dashboardImportForce = false
 		dashboardImportPlain = false
 	}()
 
 	dashJSON := `{
   "title": "Hidden Conflict Dash",
   "slug": "conflicting_hidden_slug",
+  "folder": {
+    "name": "Exported Folder",
+    "parent_id": "1"
+  },
   "dashboard_elements": []
 }`
 
@@ -2217,6 +2246,77 @@ func TestDashboardImportHiddenSlugConflict(t *testing.T) {
 		if d.Slug != nil {
 			t.Errorf("Expected slug to be nil (generated), got %s", *d.Slug)
 		}
+	}
+
+	// Second import with --force should also succeed by retrying UpdateDashboard without the conflicting slug
+	RootCmd.SetArgs([]string{"dashboard", "import", tmpFile.Name(), "801", "--plain", "--force"})
+	err = RootCmd.Execute()
+	if err != nil {
+		t.Fatalf("Second import with --force failed: %v", err)
+	}
+
+	if len(doer.dashboards) != 1 {
+		t.Errorf("Expected still 1 dashboard after force import, got %d", len(doer.dashboards))
+	}
+}
+
+func TestDashboardImportDeletedSlugConflict(t *testing.T) {
+	doer := &statefulMockDoer{
+		t: t,
+		dashboards: map[string]v4.Dashboard{
+			"trashed_1": {
+				Id:       ptr("trashed_1"),
+				Title:    ptr("Old Trashed Dash"),
+				Slug:     ptr("trashed_slug"),
+				FolderId: ptr("999"),
+				Deleted:  ptrBool(true),
+			},
+		},
+	}
+	MockSDK = v4.NewLookerSDK(doer)
+	defer func() {
+		MockSDK = nil
+		dashboardImportForce = false
+		dashboardImportPlain = false
+	}()
+
+	dashJSON := `{
+  "title": "New Dash With Trashed Slug",
+  "slug": "trashed_slug",
+  "dashboard_elements": []
+}`
+
+	tmpFile, err := os.CreateTemp("", "dashboard_import_deleted_slug_*.json")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+	if _, err := tmpFile.Write([]byte(dashJSON)); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	_ = tmpFile.Close()
+
+	// First import (create) should detect the deleted slug conflict and create without slug
+	RootCmd.SetArgs([]string{"dashboard", "import", tmpFile.Name(), "801", "--plain"})
+	err = RootCmd.Execute()
+	if err != nil {
+		t.Fatalf("First import failed: %v", err)
+	}
+
+	if len(doer.dashboards) != 2 {
+		t.Errorf("Expected 2 dashboards (1 trashed + 1 new), got %d", len(doer.dashboards))
+	}
+
+	// Second import with --force (update) should also detect the deleted slug conflict and update without error
+	RootCmd.SetArgs([]string{"dashboard", "import", tmpFile.Name(), "801", "--plain", "--force"})
+	err = RootCmd.Execute()
+	if err != nil {
+		t.Fatalf("Second import with --force failed: %v", err)
+	}
+
+	if len(doer.dashboards) != 2 {
+		t.Errorf("Expected still 2 dashboards after force import, got %d", len(doer.dashboards))
 	}
 }
 

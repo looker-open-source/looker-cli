@@ -435,8 +435,8 @@ var dashboardImportCmd = &cobra.Command{
 		}
 
 		var existingDash *v4.Dashboard
-		var slugConflict bool
-		var conflictingFolder string
+		var slugUsed *v4.Dashboard
+		var titleUsed *v4.Dashboard
 
 		if slug != "" {
 			if cfgDebug {
@@ -449,18 +449,23 @@ var dashboardImportCmd = &cobra.Command{
 			}
 			if len(dashes) > 0 {
 				match := dashes[0]
-				if match.FolderId != nil && *match.FolderId == folderID {
+				slugUsed = &match
+				if match.FolderId != nil && *match.FolderId == folderID && (match.Deleted == nil || !*match.Deleted) {
 					existingDash = &match
-				} else {
-					slugConflict = true
-					if match.FolderId != nil {
-						conflictingFolder = *match.FolderId
-					}
+				}
+			} else {
+				deletedDashes, err := c.SDK.SearchDashboards(v4.RequestSearchDashboards{Slug: &slug, Deleted: ptr("true")}, nil)
+				if err != nil {
+					return fmt.Errorf("failed to search deleted dashboards by slug %s: %w", slug, err)
+				}
+				if len(deletedDashes) > 0 {
+					match := deletedDashes[0]
+					slugUsed = &match
 				}
 			}
 		}
 
-		if existingDash == nil && title != "" {
+		if title != "" {
 			if cfgDebug {
 				fmt.Fprintf(os.Stderr, "Searching for existing dashboard by title '%s'\n", title)
 			}
@@ -469,23 +474,39 @@ var dashboardImportCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("failed to search dashboards by title %q in folder %s: %w", title, folderID, err)
 			}
-			if len(dashes) > 0 {
-				existingDash = &dashes[0]
+			for i := range dashes {
+				if dashes[i].Deleted == nil || !*dashes[i].Deleted {
+					titleUsed = &dashes[i]
+					break
+				}
+			}
+		}
+
+		if existingDash != nil && titleUsed != nil && existingDash.Id != nil && titleUsed.Id != nil && *existingDash.Id != *titleUsed.Id {
+			return fmt.Errorf("dashboard '%s' already exists in folder %s. Delete it before trying to update another dashboard to have that title", title, folderID)
+		}
+
+		if existingDash == nil {
+			existingDash = titleUsed
+		}
+
+		slugConflict := slugUsed != nil && (existingDash == nil || existingDash.Id == nil || slugUsed.Id == nil || *existingDash.Id != *slugUsed.Id)
+		if slugConflict && !dashboardImportPlain {
+			if slugUsed.Deleted != nil && *slugUsed.Deleted {
+				fmt.Printf("Warning: Slug '%s' is already in use on a deleted dashboard. Generating a new slug for this import.\n", slug)
+			} else {
+				conflictingFolder := ""
+				if slugUsed.FolderId != nil {
+					conflictingFolder = *slugUsed.FolderId
+				}
+				fmt.Printf("Warning: Slug '%s' is already in use in folder %s. Generating a new slug for this import.\n", slug, conflictingFolder)
 			}
 		}
 
 		db, _ := json.Marshal(m)
 		var wd v4.WriteDashboard
 		_ = json.Unmarshal(db, &wd)
-		wd.FolderId = &folderID
-		wd.UserId = &myID
-
-		if slugConflict {
-			if !dashboardImportPlain {
-				fmt.Printf("Warning: Slug '%s' is already in use in folder %s. Generating a new slug for this import.\n", slug, conflictingFolder)
-			}
-			wd.Slug = nil // Force Looker to generate a new slug or keep existing
-		}
+		wd.Folder = nil
 
 		var resultDash *v4.Dashboard
 
@@ -497,10 +518,30 @@ var dashboardImportCmd = &cobra.Command{
 			if !dashboardImportForce {
 				return fmt.Errorf("dashboard '%s' already exists in folder %s. Use --force to overwrite", title, folderID)
 			}
+			wd.FolderId = nil
+			wd.UserId = nil
+			if slugUsed != nil {
+				wd.Slug = nil
+			}
+			if existingDash.Deleted != nil && *existingDash.Deleted {
+				wd.Deleted = ptrBool(false)
+			} else {
+				wd.Deleted = nil
+			}
+
 			edID := *existingDash.Id
 			updated, err := c.SDK.UpdateDashboard(edID, wd, nil)
 			if err != nil {
-				return fmt.Errorf("failed to update dashboard %s: %w", edID, err)
+				if strings.Contains(err.Error(), "status=409") && wd.Slug != nil {
+					if !dashboardImportPlain {
+						fmt.Printf("Warning: Conflict occurred on update. Retrying without slug.\n")
+					}
+					wd.Slug = nil
+					updated, err = c.SDK.UpdateDashboard(edID, wd, nil)
+				}
+				if err != nil {
+					return fmt.Errorf("failed to update dashboard %s: %w", edID, err)
+				}
 			}
 			resultDash = &updated
 
@@ -528,6 +569,13 @@ var dashboardImportCmd = &cobra.Command{
 		} else {
 			if cfgDebug {
 				fmt.Fprintf(os.Stderr, "Creating new dashboard in folder %s\n", folderID)
+			}
+
+			wd.FolderId = &folderID
+			wd.UserId = &myID
+			wd.Deleted = nil
+			if slugUsed != nil {
+				wd.Slug = nil
 			}
 
 			created, err := c.SDK.CreateDashboard(wd, nil)
