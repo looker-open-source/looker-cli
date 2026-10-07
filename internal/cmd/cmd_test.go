@@ -169,6 +169,8 @@ type mockDoer struct {
 	t               *testing.T
 	folder801Looks  []v4.LookWithQuery
 	elementsCreated int
+	createdElements []v4.WriteDashboardElement
+	createdQueries  []v4.WriteQuery
 }
 
 func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[string]interface{}, body interface{}, options *rtl.ApiSettings) error {
@@ -255,6 +257,32 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 		b, _ := json.Marshal(dash)
 		return json.Unmarshal(b, result)
 	}
+	if method == "GET" && path == "/dashboards/3189" {
+		dash := v4.Dashboard{
+			Id:    ptr("3189"),
+			Title: ptr("Result Maker Query Test Dashboard"),
+			DashboardElements: &[]v4.DashboardElement{
+				{
+					Id:            ptr("elem_rm_1"),
+					Title:         ptr("RM Element"),
+					Type:          ptr("vis"),
+					ResultMakerId: ptr("rm_123"),
+					ResultMaker: &v4.ResultMakerWithIdVisConfigAndDynamicFields{
+						Id:            ptr("rm_123"),
+						DynamicFields: ptr("[{\"table_calculation\":\"calc_1\"}]"),
+						Query: &v4.Query{
+							Id:     ptr("query_789"),
+							Model:  "rm_model",
+							View:   "rm_view",
+							Fields: &[]string{"rm_field1"},
+						},
+					},
+				},
+			},
+		}
+		b, _ := json.Marshal(dash)
+		return json.Unmarshal(b, result)
+	}
 	if method == "GET" && path == "/merge_queries/merge_123" {
 		mq := v4.MergeQuery{
 			Id: ptr("merge_123"),
@@ -310,11 +338,19 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 	}
 	if method == "POST" && path == "/dashboard_elements" {
 		m.elementsCreated++
+		bodyBytes, _ := json.Marshal(body)
+		var wde v4.WriteDashboardElement
+		_ = json.Unmarshal(bodyBytes, &wde)
+		m.createdElements = append(m.createdElements, wde)
 		elem := v4.DashboardElement{Id: ptr("new_elem_1")}
 		b, _ := json.Marshal(elem)
 		return json.Unmarshal(b, result)
 	}
 	if method == "POST" && path == "/queries" {
+		bodyBytes, _ := json.Marshal(body)
+		var wq v4.WriteQuery
+		_ = json.Unmarshal(bodyBytes, &wq)
+		m.createdQueries = append(m.createdQueries, wq)
 		q := v4.Query{
 			Id: ptr("new_query_456"),
 		}
@@ -2371,4 +2407,162 @@ func TestHeaderFlags(t *testing.T) {
 		t.Errorf("expected error for invalid header format, got nil")
 	}
 }
+
+func TestDashboardCatTrimPreservesResultMaker(t *testing.T) {
+	MockSDK = v4.NewLookerSDK(&mockDoer{t: t})
+	defer func() {
+		MockSDK = nil
+		dashboardCatTrim = false
+	}()
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	RootCmd.SetArgs([]string{"dashboard", "cat", "3189", "--trim"})
+	err := RootCmd.Execute()
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	_ = w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := buf.String()
+
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		t.Fatalf("Failed to unmarshal output: %v\nOutput was: %s", err, out)
+	}
+
+	elements, ok := m["dashboard_elements"].([]interface{})
+	if !ok || len(elements) == 0 {
+		t.Fatalf("No dashboard elements found in output: %s", out)
+	}
+
+	elem := elements[0].(map[string]interface{})
+	rm, ok := elem["result_maker"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("result_maker missing from trimmed dashboard element: %s", out)
+	}
+
+	query, ok := rm["query"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("query missing from result_maker: %s", out)
+	}
+	if query["model"] != "rm_model" || query["view"] != "rm_view" {
+		t.Errorf("Unexpected query definition in result_maker: %v", query)
+	}
+}
+
+func TestDashboardImportWithResultMakerQueryCommand(t *testing.T) {
+	doer := &mockDoer{t: t}
+	MockSDK = v4.NewLookerSDK(doer)
+	defer func() {
+		MockSDK = nil
+		dashboardImportPlain = false
+	}()
+
+	dashJSON := `{
+  "title": "Import Result Maker Query Dash",
+  "dashboard_elements": [
+    {
+      "id": "elem_rm_1",
+      "title": "RM Query Element",
+      "type": "vis",
+      "query_id": "old_query_789",
+      "result_maker_id": "old_rm_123",
+      "result_maker": {
+        "id": "old_rm_123",
+        "sql_query_id": "old_sql_123",
+        "dynamic_fields": "[{\"table_calculation\":\"calc_1\"}]",
+        "query": {
+          "id": "old_query_789",
+          "model": "rm_model",
+          "view": "rm_view",
+          "fields": ["rm_field1"],
+          "client_id": "old_client_id_123"
+        }
+      }
+    }
+  ],
+  "dashboard_layouts": [
+    {
+      "id": "layout_1",
+      "active": true,
+      "dashboard_layout_components": [
+        {
+          "id": "comp_1",
+          "dashboard_element_id": "elem_rm_1",
+          "element_title": "RM Query Element"
+        }
+      ]
+    }
+  ]
+}`
+
+	tmpFile, err := os.CreateTemp("", "dashboard_import_rm_query_*.json")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+	if _, err := tmpFile.Write([]byte(dashJSON)); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	_ = tmpFile.Close()
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	RootCmd.SetArgs([]string{"dashboard", "import", tmpFile.Name(), "801", "--plain"})
+	err = RootCmd.Execute()
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	_ = w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := strings.TrimSpace(buf.String())
+
+	if out != "new_dash_1" {
+		t.Errorf("expected new_dash_1, got %s", out)
+	}
+
+	if len(doer.createdQueries) != 1 {
+		t.Fatalf("expected 1 query created, got %d", len(doer.createdQueries))
+	}
+	cq := doer.createdQueries[0]
+	if cq.Model != "rm_model" || cq.View != "rm_view" {
+		t.Errorf("expected query model=rm_model, view=rm_view, got model=%s, view=%s", cq.Model, cq.View)
+	}
+	if cq.ClientId != nil {
+		t.Errorf("expected query client_id to be nil, got %v", *cq.ClientId)
+	}
+
+	if len(doer.createdElements) != 1 {
+		t.Fatalf("expected 1 element created, got %d", len(doer.createdElements))
+	}
+	ce := doer.createdElements[0]
+	if ce.QueryId == nil || *ce.QueryId != "new_query_456" {
+		t.Errorf("expected element query_id='new_query_456', got %v", ce.QueryId)
+	}
+	if ce.ResultMaker == nil {
+		t.Fatalf("expected element result_maker to be preserved, got nil")
+	}
+	if ce.ResultMaker.Query != nil {
+		t.Errorf("expected element result_maker.query to be nil, got %v", ce.ResultMaker.Query)
+	}
+	if ce.ResultMaker.SqlQueryId != nil {
+		t.Errorf("expected element result_maker.sql_query_id to be nil, got %v", ce.ResultMaker.SqlQueryId)
+	}
+	if ce.ResultMaker.DynamicFields == nil || *ce.ResultMaker.DynamicFields != "[{\"table_calculation\":\"calc_1\"}]" {
+		t.Errorf("expected element result_maker.dynamic_fields to be preserved, got %v", ce.ResultMaker.DynamicFields)
+	}
+}
+
 

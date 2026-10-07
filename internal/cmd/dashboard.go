@@ -186,6 +186,7 @@ var dashboardCatCmd = &cobra.Command{
 							"query_id":          true,
 							"merge_result_id":   true,
 							"result_maker_id":   true,
+							"result_maker":      true,
 							"look":              true,
 							"query":             true,
 							"merge_result":      true,
@@ -711,6 +712,13 @@ var dashboardImportCmd = &cobra.Command{
 									wde.QueryId = nil
 									wde.MergeResultId = nil
 
+									qVal, hasQuery := elemMap["query"].(map[string]interface{})
+									if !hasQuery {
+										if rmVal, ok := elemMap["result_maker"].(map[string]interface{}); ok {
+											qVal, hasQuery = rmVal["query"].(map[string]interface{})
+										}
+									}
+
 									if lookVal, ok := elemMap["look"].(map[string]interface{}); ok {
 										if qMap, ok := lookVal["query"].(map[string]interface{}); ok {
 											delete(qMap, "client_id")
@@ -722,7 +730,7 @@ var dashboardImportCmd = &cobra.Command{
 										} else if err != nil {
 											fmt.Fprintf(os.Stderr, "UpsertLookHelper failed: %v\n", err)
 										}
-									} else if qVal, ok := elemMap["query"].(map[string]interface{}); ok {
+									} else if hasQuery {
 										qb, _ := json.Marshal(qVal)
 										var wq v4.WriteQuery
 										_ = json.Unmarshal(qb, &wq)
