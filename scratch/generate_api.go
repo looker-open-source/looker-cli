@@ -83,7 +83,7 @@ func main() {
 			targetURL = fmt.Sprintf("https://%s:%s", host, port)
 		}
 	}
-	if !strings.HasSuffix(targetURL, "/api/4.0/swagger.json") {
+	if !strings.HasSuffix(targetURL, ".json") {
 		targetURL = strings.TrimSuffix(targetURL, "/")
 		targetURL = targetURL + "/api/4.0/swagger.json"
 	}
