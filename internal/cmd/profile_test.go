@@ -450,3 +450,162 @@ func TestSessionLogout_DeletesTokens(t *testing.T) {
 	}
 }
 
+func TestProfileCommands_CleanHost(t *testing.T) {
+	tmpDir := setupTempConfig(t)
+	defer teardownTempConfig(t, tmpDir)
+
+	// Add profile with https:// and trailing slash
+	out, err := executeCommand("profile", "add", "prof-https", "--host", "https://test-https.looker.com/", "--port", "19999")
+	if err != nil {
+		t.Fatalf("profile add failed: %v", err)
+	}
+	if !strings.Contains(out, "Profile \"prof-https\" added.") {
+		t.Errorf("expected success message, got %q", out)
+	}
+
+	// Add profile with http:// and trailing slash
+	_, err = executeCommand("profile", "add", "prof-http", "--host", "http://test-http.looker.com/", "--port", "19999")
+	if err != nil {
+		t.Fatalf("profile add failed: %v", err)
+	}
+
+	// Add profile with trailing slash only
+	_, err = executeCommand("profile", "add", "prof-slash", "--host", "test-slash.looker.com/", "--port", "19999")
+	if err != nil {
+		t.Fatalf("profile add failed: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load failed: %v", err)
+	}
+
+	if h := cfg.Profiles["prof-https"].Host; h != "test-https.looker.com" {
+		t.Errorf("expected host 'test-https.looker.com', got %q", h)
+	}
+	if h := cfg.Profiles["prof-http"].Host; h != "test-http.looker.com" {
+		t.Errorf("expected host 'test-http.looker.com', got %q", h)
+	}
+	if h := cfg.Profiles["prof-slash"].Host; h != "test-slash.looker.com" {
+		t.Errorf("expected host 'test-slash.looker.com', got %q", h)
+	}
+
+	// List profiles and verify cleaned hostnames
+	out, err = executeCommand("profile", "ls")
+	if err != nil {
+		t.Fatalf("profile ls failed: %v", err)
+	}
+	if !strings.Contains(out, "prof-https (test-https.looker.com:19999)") {
+		t.Errorf("expected cleaned host in ls output, got %q", out)
+	}
+	if !strings.Contains(out, "prof-http (test-http.looker.com:19999)") {
+		t.Errorf("expected cleaned host in ls output, got %q", out)
+	}
+	if !strings.Contains(out, "prof-slash (test-slash.looker.com:19999)") {
+		t.Errorf("expected cleaned host in ls output, got %q", out)
+	}
+}
+
+func TestInitClient_CleanHost(t *testing.T) {
+	tmpDir := setupTempConfig(t)
+	defer teardownTempConfig(t, tmpDir)
+
+	_ = RootCmd.PersistentFlags().Set("token", "dummy_token")
+	RootCmd.PersistentFlags().Lookup("token").Changed = true
+	defer func() {
+		_ = RootCmd.PersistentFlags().Set("token", "")
+		RootCmd.PersistentFlags().Lookup("token").Changed = false
+	}()
+
+	testCases := []struct {
+		name      string
+		cliHost   string
+		wantHost  string
+		wantBase  string
+	}{
+		{
+			name:     "https prefix and trailing slash",
+			cliHost:  "https://cli-test.looker.com/",
+			wantHost: "cli-test.looker.com",
+			wantBase: "https://cli-test.looker.com:19999",
+		},
+		{
+			name:     "http prefix and trailing slash",
+			cliHost:  "http://cli-test.looker.com/",
+			wantHost: "cli-test.looker.com",
+			wantBase: "https://cli-test.looker.com:19999",
+		},
+		{
+			name:     "trailing slash only",
+			cliHost:  "cli-test.looker.com/",
+			wantHost: "cli-test.looker.com",
+			wantBase: "https://cli-test.looker.com:19999",
+		},
+		{
+			name:     "https prefix without trailing slash",
+			cliHost:  "https://cli-test.looker.com",
+			wantHost: "cli-test.looker.com",
+			wantBase: "https://cli-test.looker.com:19999",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = RootCmd.PersistentFlags().Set("host", tc.cliHost)
+			_ = RootCmd.PersistentFlags().Set("port", "19999")
+			RootCmd.PersistentFlags().Lookup("host").Changed = true
+			RootCmd.PersistentFlags().Lookup("port").Changed = false
+			defer func() {
+				_ = RootCmd.PersistentFlags().Set("host", "localhost")
+				RootCmd.PersistentFlags().Lookup("host").Changed = false
+			}()
+
+			wrapper, err := initClient(context.Background(), false)
+			if err != nil {
+				t.Fatalf("initClient failed: %v", err)
+			}
+			if wrapper.Host != tc.wantHost {
+				t.Errorf("wrapper.Host = %q, want %q", wrapper.Host, tc.wantHost)
+			}
+			if wrapper.Session.Config.BaseUrl != tc.wantBase {
+				t.Errorf("BaseUrl = %q, want %q", wrapper.Session.Config.BaseUrl, tc.wantBase)
+			}
+		})
+	}
+
+	t.Run("Profile with unstripped host is cleaned on load", func(t *testing.T) {
+		cfg := &config.Config{
+			Default: "raw-prof",
+			Profiles: map[string]config.Profile{
+				"raw-prof": {
+					Host:         "https://raw-profile-host.com/",
+					Port:         "1234",
+					ClientID:     "prof-id",
+					ClientSecret: "prof-sec",
+				},
+			},
+		}
+		if err := cfg.Save(); err != nil {
+			t.Fatalf("cfg.Save failed: %v", err)
+		}
+
+		_ = RootCmd.PersistentFlags().Set("host", "localhost")
+		RootCmd.PersistentFlags().Lookup("host").Changed = false
+		cfgProfile = "raw-prof"
+		defer func() {
+			cfgProfile = ""
+		}()
+
+		wrapper, err := initClient(context.Background(), false)
+		if err != nil {
+			t.Fatalf("initClient failed: %v", err)
+		}
+		if wrapper.Host != "raw-profile-host.com" {
+			t.Errorf("wrapper.Host = %q, want 'raw-profile-host.com'", wrapper.Host)
+		}
+		if wrapper.Session.Config.BaseUrl != "https://raw-profile-host.com:1234" {
+			t.Errorf("BaseUrl = %q, want 'https://raw-profile-host.com:1234'", wrapper.Session.Config.BaseUrl)
+		}
+	})
+}
+

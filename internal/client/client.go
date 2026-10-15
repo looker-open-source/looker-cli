@@ -27,6 +27,7 @@ import (
 	"github.com/looker-open-source/sdk-codegen/go/rtl"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/looker-open-source/looker-cli/internal/config"
+	"github.com/looker-open-source/looker-cli/internal/util"
 	"golang.org/x/oauth2"
 )
 
@@ -75,6 +76,8 @@ func applyHeaders(h http.Header, headers []Header) {
 
 // NewClient initializes LookerSDK based on provided flags and auth mechanisms.
 func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, suUser string, ssl, verifySSL, oauth, tokenFile bool, activeProfile string, headers ...string) (*ClientWrapper, error) {
+	host = util.CleanHost(host)
+
 	parsedHeaders, err := ParseHeaders(headers)
 	if err != nil {
 		return nil, err

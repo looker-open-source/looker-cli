@@ -22,6 +22,7 @@ import (
 
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/config"
+	"github.com/looker-open-source/looker-cli/internal/util"
 	rtl "github.com/looker-open-source/sdk-codegen/go/rtl"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/spf13/cobra"
@@ -132,6 +133,7 @@ func initClient(ctx context.Context, oauth bool) (*client.ClientWrapper, error) 
 			}
 			sdk = v4.NewLookerSDK(&headerDoer{AuthSessionDoer: MockSDK.AuthSession, headers: headersMap})
 		}
+		host = util.CleanHost(host)
 		return &client.ClientWrapper{SDK: sdk, Host: host, SuUser: cfgSuUser, ActiveProfile: activeProfile}, nil
 	}
 
@@ -166,6 +168,7 @@ func initClient(ctx context.Context, oauth bool) (*client.ClientWrapper, error) 
 			}
 		}
 	}
+	host = util.CleanHost(host)
 
 	port := cfgPort
 	if !RootCmd.PersistentFlags().Lookup("port").Changed {

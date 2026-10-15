@@ -20,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/looker-open-source/looker-cli/internal/util"
 )
 
 const (
@@ -103,6 +105,7 @@ func WriteTokenData(data TokenData) error {
 }
 
 func GetTokenEntry(host, suUser string) (TokenEntry, error) {
+	host = util.CleanHost(host)
 	data, err := ReadTokenData()
 	if err != nil {
 		return TokenEntry{}, err
@@ -127,6 +130,7 @@ func GetTokenEntry(host, suUser string) (TokenEntry, error) {
 }
 
 func GetToken(host, suUser string) (string, error) {
+	host = util.CleanHost(host)
 	entry, err := GetTokenEntry(host, suUser)
 	if err != nil {
 		return "", err
@@ -147,6 +151,7 @@ func GetToken(host, suUser string) (string, error) {
 }
 
 func DeleteToken(host, suUser string) error {
+	host = util.CleanHost(host)
 	data, err := ReadTokenData()
 	if err != nil {
 		return err
@@ -196,6 +201,7 @@ func IsRefreshTokenExpired(refreshExpiration, accessExpiration string) bool {
 }
 
 func StoreToken(host, suUser, token, refreshToken, clientID string, expiration time.Time) error {
+	host = util.CleanHost(host)
 	data, err := ReadTokenData()
 	if err != nil {
 		return err

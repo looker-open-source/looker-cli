@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/looker-open-source/looker-cli/internal/util"
 	"github.com/pkg/browser"
 )
 
@@ -64,6 +65,8 @@ func generatePKCE() (verifier, challenge string, err error) {
 
 // PerformOAuthLogin initiates PKCE flow, opens browser, waits for callback, and exchanges code for token.
 func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl bool, headers ...Header) (string, string, time.Time, error) {
+	host = util.CleanHost(host)
+
 	verifier, challenge, err := generatePKCE()
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to generate PKCE: %w", err)
@@ -246,6 +249,8 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 
 // RefreshOAuthToken performs explicit OAuth2 refresh token grant to get a new short-lived access token.
 func RefreshOAuthToken(ctx context.Context, host, port, clientID, refreshToken string, ssl bool, headers ...Header) (string, string, time.Time, error) {
+	host = util.CleanHost(host)
+
 	scheme := "https"
 	if !ssl {
 		scheme = "http"

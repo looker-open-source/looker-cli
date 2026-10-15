@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/looker-open-source/looker-cli/internal/util"
 	"gopkg.in/yaml.v2"
 )
 
@@ -83,11 +84,21 @@ func Load() (*Config, error) {
 		cfg.Profiles = make(map[string]Profile)
 	}
 
+	for name, prof := range cfg.Profiles {
+		prof.Host = util.CleanHost(prof.Host)
+		cfg.Profiles[name] = prof
+	}
+
 	return &cfg, nil
 }
 
 // Save saves the config to the config file.
 func (c *Config) Save() error {
+	for name, prof := range c.Profiles {
+		prof.Host = util.CleanHost(prof.Host)
+		c.Profiles[name] = prof
+	}
+
 	path, err := ConfigPath()
 	if err != nil {
 		return err

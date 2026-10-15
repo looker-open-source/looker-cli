@@ -20,6 +20,7 @@ import (
 
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/config"
+	"github.com/looker-open-source/looker-cli/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -113,7 +114,7 @@ var profileAddCmd = &cobra.Command{
 		}
 
 		prof := config.Profile{
-			Host:              profHost,
+			Host:              util.CleanHost(profHost),
 			Port:              profPort,
 			ClientID:          profClientID,
 			ClientSecret:      profClientSecret,

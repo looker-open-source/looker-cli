@@ -587,3 +587,107 @@ func TestNewClient_CustomHeaders(t *testing.T) {
 	}
 }
 
+func TestNewClient_CleanHost(t *testing.T) {
+	testCases := []struct {
+		inputHost string
+		wantHost  string
+		wantBase  string
+	}{
+		{
+			inputHost: "https://myinstance.looker.com/",
+			wantHost:  "myinstance.looker.com",
+			wantBase:  "https://myinstance.looker.com:19999",
+		},
+		{
+			inputHost: "http://myinstance.looker.com/",
+			wantHost:  "myinstance.looker.com",
+			wantBase:  "https://myinstance.looker.com:19999",
+		},
+		{
+			inputHost: "myinstance.looker.com/",
+			wantHost:  "myinstance.looker.com",
+			wantBase:  "https://myinstance.looker.com:19999",
+		},
+		{
+			inputHost: "https://myinstance.looker.com",
+			wantHost:  "myinstance.looker.com",
+			wantBase:  "https://myinstance.looker.com:19999",
+		},
+	}
+
+	for _, tc := range testCases {
+		wrapper, err := NewClient(
+			context.Background(),
+			tc.inputHost,
+			"19999",
+			"",
+			"",
+			"test_token",
+			"",
+			true,
+			true,
+			false,
+			false,
+			"",
+		)
+		if err != nil {
+			t.Fatalf("NewClient(%q) failed: %v", tc.inputHost, err)
+		}
+		if wrapper.Host != tc.wantHost {
+			t.Errorf("NewClient(%q) wrapper.Host = %q, want %q", tc.inputHost, wrapper.Host, tc.wantHost)
+		}
+		if wrapper.Session.Config.BaseUrl != tc.wantBase {
+			t.Errorf("NewClient(%q) BaseUrl = %q, want %q", tc.inputHost, wrapper.Session.Config.BaseUrl, tc.wantBase)
+		}
+	}
+}
+
+func TestTokenStorage_CleanHost(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "looker_cli_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	origHome := os.Getenv("HOME")
+	defer func() { _ = os.Setenv("HOME", origHome) }()
+	_ = os.Setenv("HOME", tmpDir)
+
+	exp := time.Now().Add(1 * time.Hour)
+
+	// Store with https:// and trailing slash
+	err = StoreToken("https://test.looker.com/", "", "tok1", "", "", exp)
+	if err != nil {
+		t.Fatalf("StoreToken failed: %v", err)
+	}
+
+	// Retrieve with clean hostname
+	gotTok, err := GetToken("test.looker.com", "")
+	if err != nil {
+		t.Fatalf("GetToken with clean host failed: %v", err)
+	}
+	if gotTok != "tok1" {
+		t.Errorf("expected tok1, got %q", gotTok)
+	}
+
+	// Retrieve with http:// and trailing slash
+	gotTok2, err := GetToken("http://test.looker.com/", "")
+	if err != nil {
+		t.Fatalf("GetToken with http host failed: %v", err)
+	}
+	if gotTok2 != "tok1" {
+		t.Errorf("expected tok1, got %q", gotTok2)
+	}
+
+	// Delete with trailing slash only
+	err = DeleteToken("test.looker.com/", "")
+	if err != nil {
+		t.Fatalf("DeleteToken failed: %v", err)
+	}
+
+	// Verify deleted
+	if _, err := GetToken("test.looker.com", ""); err == nil {
+		t.Errorf("expected token to be deleted")
+	}
+}
+

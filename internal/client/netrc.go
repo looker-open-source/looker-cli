@@ -20,10 +20,12 @@ import (
 	"path/filepath"
 
 	"github.com/bgentry/go-netrc/netrc"
+	"github.com/looker-open-source/looker-cli/internal/util"
 )
 
 // GetNetrcCredentials parses ~/.netrc and returns (clientID, clientSecret, error) for the given host.
 func GetNetrcCredentials(host string) (string, string, error) {
+	host = util.CleanHost(host)
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get home directory: %w", err)

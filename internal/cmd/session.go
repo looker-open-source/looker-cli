@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/config"
+	"github.com/looker-open-source/looker-cli/internal/util"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 )
 
@@ -122,6 +123,7 @@ var sessionLogoutCmd = &cobra.Command{
 				}
 			}
 		}
+		host = util.CleanHost(host)
 
 		origTokenFile := cfgTokenFile
 		if !cfgTokenFile {
@@ -150,7 +152,7 @@ var sessionLogoutCmd = &cobra.Command{
 			client.ClearProfileToken(activeProfile)
 		}
 		_ = client.DeleteToken(host, cfgSuUser)
-		if cfgHost != "" && cfgHost != host {
+		if cfgHost != "" && util.CleanHost(cfgHost) != host {
 			_ = client.DeleteToken(cfgHost, cfgSuUser)
 		}
 
