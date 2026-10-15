@@ -510,6 +510,16 @@ func TestInitClient_CleanHost(t *testing.T) {
 	tmpDir := setupTempConfig(t)
 	defer teardownTempConfig(t, tmpDir)
 
+	origBaseURL, hasBaseURL := os.LookupEnv("LOOKERSDK_BASE_URL")
+	_ = os.Unsetenv("LOOKERSDK_BASE_URL")
+	defer func() {
+		if hasBaseURL {
+			_ = os.Setenv("LOOKERSDK_BASE_URL", origBaseURL)
+		} else {
+			_ = os.Unsetenv("LOOKERSDK_BASE_URL")
+		}
+	}()
+
 	_ = RootCmd.PersistentFlags().Set("token", "dummy_token")
 	RootCmd.PersistentFlags().Lookup("token").Changed = true
 	defer func() {
@@ -605,6 +615,36 @@ func TestInitClient_CleanHost(t *testing.T) {
 		}
 		if wrapper.Session.Config.BaseUrl != "https://raw-profile-host.com:1234" {
 			t.Errorf("BaseUrl = %q, want 'https://raw-profile-host.com:1234'", wrapper.Session.Config.BaseUrl)
+		}
+	})
+
+	t.Run("LOOKERSDK_BASE_URL with unstripped host is cleaned", func(t *testing.T) {
+		cfg := &config.Config{}
+		if err := cfg.Save(); err != nil {
+			t.Fatalf("cfg.Save failed: %v", err)
+		}
+
+		_ = os.Setenv("LOOKERSDK_BASE_URL", "https://env-test.looker.com:20000/")
+		defer func() {
+			_ = os.Unsetenv("LOOKERSDK_BASE_URL")
+		}()
+
+		_ = RootCmd.PersistentFlags().Set("host", "localhost")
+		RootCmd.PersistentFlags().Lookup("host").Changed = false
+		defer func() {
+			_ = RootCmd.PersistentFlags().Set("host", "localhost")
+			RootCmd.PersistentFlags().Lookup("host").Changed = false
+		}()
+
+		wrapper, err := initClient(context.Background(), false)
+		if err != nil {
+			t.Fatalf("initClient failed: %v", err)
+		}
+		if wrapper.Host != "env-test.looker.com" {
+			t.Errorf("wrapper.Host = %q, want 'env-test.looker.com'", wrapper.Host)
+		}
+		if wrapper.Session.Config.BaseUrl != "https://env-test.looker.com:20000" {
+			t.Errorf("BaseUrl = %q, want 'https://env-test.looker.com:20000'", wrapper.Session.Config.BaseUrl)
 		}
 	})
 }
