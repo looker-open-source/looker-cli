@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/looker-open-source/looker-cli/compare/v1.0.0...v1.1.0) (2026-10-17)
+
+
+### Features
+
+* project commit and project push ([#303](https://github.com/looker-open-source/looker-cli/issues/303)) ([160fa24](https://github.com/looker-open-source/looker-cli/commit/160fa24ab182d81d522029411102c4bc59e03344))
+
+
+### Bug Fixes
+
+* strip scheme and trailing slash from hostnames ([#321](https://github.com/looker-open-source/looker-cli/issues/321)) ([8df93c3](https://github.com/looker-open-source/looker-cli/commit/8df93c376818345e01bf58971ed3e16335122b1d))
+
 ## [1.0.0](https://github.com/looker-open-source/looker-cli/compare/v0.4.11...v1.0.0) (2026-10-13)
 
 
