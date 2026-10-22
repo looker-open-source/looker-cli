@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/looker-open-source/looker-cli/compare/v1.1.0...v1.1.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* place imported dashboard elements on their original tab ([#322](https://github.com/looker-open-source/looker-cli/issues/322)) ([#324](https://github.com/looker-open-source/looker-cli/issues/324)) ([0d2069f](https://github.com/looker-open-source/looker-cli/commit/0d2069fdf2c8788f8ad5246797ea757140f81fc6))
+* preserve classic dashboard style on export and import ([#323](https://github.com/looker-open-source/looker-cli/issues/323)) ([#325](https://github.com/looker-open-source/looker-cli/issues/325)) ([24fabff](https://github.com/looker-open-source/looker-cli/commit/24fabff1b6c21f8151ac5abf877933cf9c79b9cd))
+
 ## [1.1.0](https://github.com/looker-open-source/looker-cli/compare/v1.0.0...v1.1.0) (2026-10-17)
 
 
