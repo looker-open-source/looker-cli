@@ -706,6 +706,7 @@ var dashboardImportCmd = &cobra.Command{
 									var wde v4.WriteDashboardElement
 									_ = json.Unmarshal(eb, &wde)
 									wde.DashboardId = &resID
+									wde.DashboardLayoutId = &activeLayoutID
 
 									wde.ResultMakerId = nil
 									wde.LookId = nil
