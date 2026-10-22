@@ -2036,6 +2036,142 @@ func TestDashboardImportCommand(t *testing.T) {
 	}
 }
 
+// tabbedMockDoer mimics how Looker places new dashboard elements: an element
+// created without a dashboard_layout_id gets its layout component on the
+// first (active) layout, not on the tab it came from.
+type tabbedMockDoer struct {
+	layouts    []string
+	components map[string][]v4.DashboardLayoutComponent
+	elements   int
+}
+
+func (m *tabbedMockDoer) Do(result interface{}, method, ver, path string, reqPars map[string]interface{}, body interface{}, options *rtl.ApiSettings) error {
+	var res interface{}
+	switch {
+	case strings.HasPrefix(path, "/user"):
+		res = v4.User{Id: ptr("1234")}
+	case method == "GET" && path == "/dashboards/search":
+		res = []v4.Dashboard{}
+	case method == "POST" && path == "/dashboards":
+		res = v4.Dashboard{Id: ptr("new_dash_1")}
+	case method == "POST" && path == "/dashboard_layouts":
+		id := fmt.Sprintf("layout_%d", len(m.layouts)+1)
+		m.layouts = append(m.layouts, id)
+		res = v4.DashboardLayout{Id: &id}
+	case method == "POST" && path == "/dashboard_elements":
+		bodyBytes, _ := json.Marshal(body)
+		var wde v4.WriteDashboardElement
+		_ = json.Unmarshal(bodyBytes, &wde)
+		m.elements++
+		elemID := fmt.Sprintf("elem_%d", m.elements)
+		layoutID := m.layouts[0]
+		if wde.DashboardLayoutId != nil {
+			layoutID = *wde.DashboardLayoutId
+		}
+		compID := fmt.Sprintf("comp_%d", m.elements)
+		m.components[layoutID] = append(m.components[layoutID], v4.DashboardLayoutComponent{
+			Id:                 &compID,
+			DashboardLayoutId:  &layoutID,
+			DashboardElementId: &elemID,
+		})
+		res = v4.DashboardElement{Id: &elemID}
+	case method == "GET" && strings.HasSuffix(path, "/dashboard_layout_components"):
+		layoutID := strings.TrimSuffix(strings.TrimPrefix(path, "/dashboard_layouts/"), "/dashboard_layout_components")
+		res = m.components[layoutID]
+	case method == "PATCH" && strings.HasPrefix(path, "/dashboard_layout_components/"):
+		bodyBytes, _ := json.Marshal(body)
+		var wdlc v4.WriteDashboardLayoutComponent
+		_ = json.Unmarshal(bodyBytes, &wdlc)
+		compID := strings.TrimPrefix(path, "/dashboard_layout_components/")
+		for layoutID, comps := range m.components {
+			for i, c := range comps {
+				if *c.Id == compID {
+					m.components[layoutID][i].Row = wdlc.Row
+				}
+			}
+		}
+		res = v4.DashboardLayoutComponent{Id: &compID}
+	default:
+		return nil
+	}
+	b, _ := json.Marshal(res)
+	return json.Unmarshal(b, result)
+}
+
+func TestDashboardImportTabbedDashboard(t *testing.T) {
+	doer := &tabbedMockDoer{components: map[string][]v4.DashboardLayoutComponent{}}
+	MockSDK = v4.NewLookerSDK(doer)
+	defer func() { MockSDK = nil }()
+
+	dashJSON := `{
+  "title": "Tabbed Dash",
+  "dashboard_elements": [
+    {"id": "101", "type": "text", "title": "First tab tile", "body_text": "one"},
+    {"id": "102", "type": "text", "title": "Second tab tile", "body_text": "two"}
+  ],
+  "dashboard_layouts": [
+    {
+      "id": "src_layout_1",
+      "label": "First",
+      "active": true,
+      "dashboard_layout_components": [
+        {"id": "src_comp_1", "dashboard_element_id": "101", "row": 0}
+      ]
+    },
+    {
+      "id": "src_layout_2",
+      "label": "Second",
+      "active": false,
+      "dashboard_layout_components": [
+        {"id": "src_comp_2", "dashboard_element_id": "102", "row": 4}
+      ]
+    }
+  ]
+}`
+
+	tmpFile, err := os.CreateTemp("", "dashboard_import_tabbed_*.json")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+	if _, err := tmpFile.Write([]byte(dashJSON)); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	_ = tmpFile.Close()
+
+	oldStdout := os.Stdout
+	_, w, _ := os.Pipe()
+	os.Stdout = w
+
+	RootCmd.SetArgs([]string{"dashboard", "import", tmpFile.Name(), "801", "--plain"})
+	err = RootCmd.Execute()
+
+	_ = w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(doer.layouts) != 2 {
+		t.Fatalf("expected 2 layouts created, got %d", len(doer.layouts))
+	}
+	for i, layoutID := range doer.layouts {
+		comps := doer.components[layoutID]
+		if len(comps) != 1 {
+			t.Errorf("layout %s: expected 1 component, got %d", layoutID, len(comps))
+			continue
+		}
+		wantElem := fmt.Sprintf("elem_%d", i+1)
+		if *comps[0].DashboardElementId != wantElem {
+			t.Errorf("layout %s: expected element %s, got %s", layoutID, wantElem, *comps[0].DashboardElementId)
+		}
+	}
+	if comps := doer.components["layout_2"]; len(comps) == 1 && (comps[0].Row == nil || *comps[0].Row != 4) {
+		t.Errorf("layout_2: expected component row 4 from the source layout, got %v", comps[0].Row)
+	}
+}
+
 func TestDashboardImportFallbackCommand(t *testing.T) {
 	doer := &mockDoer{t: t}
 	MockSDK = v4.NewLookerSDK(doer)
