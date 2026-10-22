@@ -2154,6 +2154,73 @@ func TestDashboardCatCommand(t *testing.T) {
 	}
 }
 
+type styledDashboardDoer struct {
+	mockDoer
+	style string
+}
+
+func (m *styledDashboardDoer) Do(result interface{}, method, ver, path string, reqPars map[string]interface{}, body interface{}, options *rtl.ApiSettings) error {
+	if method == "GET" && path == "/dashboards/4000" {
+		dash := v4.Dashboard{Id: ptr("4000"), Title: ptr("Styled Dashboard"), Style: &m.style}
+		b, _ := json.Marshal(dash)
+		return json.Unmarshal(b, result)
+	}
+	return m.mockDoer.Do(result, method, ver, path, reqPars, body, options)
+}
+
+func TestDashboardCatStyle(t *testing.T) {
+	tests := []struct {
+		name      string
+		doer      v4.AuthSessionDoer
+		args      []string
+		wantStyle interface{}
+	}{
+		{"unset style is exported as classic", &mockDoer{t: t}, []string{"dashboard", "cat", "3188"}, "classic"},
+		{"unset style is kept by trim", &mockDoer{t: t}, []string{"dashboard", "cat", "3189", "--trim"}, "classic"},
+		{"modern style is kept", &styledDashboardDoer{mockDoer: mockDoer{t: t}, style: "modern"}, []string{"dashboard", "cat", "4000"}, "modern"},
+		{"modern style is kept by trim", &styledDashboardDoer{mockDoer: mockDoer{t: t}, style: "modern"}, []string{"dashboard", "cat", "4000", "--trim"}, "modern"},
+		{"explicit fields are not padded", &mockDoer{t: t}, []string{"dashboard", "cat", "3188", "--fields", "id,title"}, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			MockSDK = v4.NewLookerSDK(tt.doer)
+			defer func() {
+				MockSDK = nil
+				dashboardCatTrim = false
+				dashboardCatFields = ""
+			}()
+
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			RootCmd.SetArgs(tt.args)
+			err := RootCmd.Execute()
+
+			_ = w.Close()
+			os.Stdout = oldStdout
+			if err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
+			var buf bytes.Buffer
+			_, _ = io.Copy(&buf, r)
+
+			var m map[string]interface{}
+			if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+				t.Fatalf("Failed to unmarshal output: %v\nOutput was: %s", err, buf.String())
+			}
+			if tt.wantStyle == nil {
+				if _, ok := m["style"]; ok {
+					t.Errorf("expected style to be absent, got %v", m["style"])
+				}
+			} else if m["style"] != tt.wantStyle {
+				t.Errorf("expected style %v, got %v", tt.wantStyle, m["style"])
+			}
+		})
+	}
+}
+
 func TestDashboardImportWithMergeQueryCommand(t *testing.T) {
 	doer := &mockDoer{t: t}
 	MockSDK = v4.NewLookerSDK(doer)

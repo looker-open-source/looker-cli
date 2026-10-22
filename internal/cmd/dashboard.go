@@ -66,6 +66,12 @@ var dashboardCatCmd = &cobra.Command{
 		var m map[string]interface{}
 		_ = json.Unmarshal(b, &m)
 
+		// Looker returns no style for dashboards that render as classic, while new
+		// dashboards default to modern. Record it so an import keeps the same look.
+		if _, ok := m["style"]; !ok && dashboardCatFields == "" {
+			m["style"] = "classic"
+		}
+
 		if dashboardCatPlans {
 			plans, _ := c.SDK.ScheduledPlansForDashboard(v4.RequestScheduledPlansForDashboard{DashboardId: dID, AllUsers: ptrBool(true)}, nil)
 			m["scheduled_plans"] = plans
@@ -154,6 +160,7 @@ var dashboardCatCmd = &cobra.Command{
 				"text_tile_text_color":  true,
 				"crossfilter_enabled":   true,
 				"preferred_viewer":      true,
+				"style":                 true,
 				"slug":                  true,
 				"folder_id":             true,
 				"user_id":               true,
