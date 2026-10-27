@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/looker-open-source/looker-cli/compare/v1.1.1...v1.2.0) (2026-10-27)
+
+
+### Features
+
+* Update to 26.22 api and sdk ([#331](https://github.com/looker-open-source/looker-cli/issues/331)) ([803cd51](https://github.com/looker-open-source/looker-cli/commit/803cd511d05ffc9bdb78bba0288b55aff0f0de10))
+
+
+### Bug Fixes
+
+* enrich dashboard export with looks and link look-backed elements on import ([#330](https://github.com/looker-open-source/looker-cli/issues/330)) ([f56682d](https://github.com/looker-open-source/looker-cli/commit/f56682d29dbc360646fac19fe0cfc156829a0483))
+
 ## [1.1.1](https://github.com/looker-open-source/looker-cli/compare/v1.1.0...v1.1.1) (2026-10-22)
 
 
