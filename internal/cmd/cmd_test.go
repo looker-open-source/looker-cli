@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -207,6 +208,19 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 		b, _ := json.Marshal(f)
 		return json.Unmarshal(b, result)
 	}
+	if strings.HasPrefix(path, "/folders/801/children") {
+		var ch []v4.Folder
+		b, _ := json.Marshal(ch)
+		return json.Unmarshal(b, result)
+	}
+	if strings.HasPrefix(path, "/folders/801") && !strings.HasSuffix(path, "/looks") {
+		f := v4.Folder{
+			Id:   ptr("801"),
+			Name: "SubShared",
+		}
+		b, _ := json.Marshal(f)
+		return json.Unmarshal(b, result)
+	}
 	if method == "GET" && path == "/connections/my_conn" {
 		conn := v4.DBConnection{
 			Name:        ptr("my_conn"),
@@ -239,7 +253,34 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 		return json.Unmarshal(b, result)
 	}
 	if method == "GET" && path == "/dashboards/192" {
-		dash := v4.Dashboard{Id: ptr("192"), Title: ptr("Daily Profit Dashboard")}
+		dash := v4.Dashboard{
+			Id:    ptr("192"),
+			Title: ptr("Daily Profit Dashboard"),
+			DashboardElements: &[]v4.DashboardElement{
+				{
+					Id:     ptr("elem_look_857"),
+					Title:  ptr("Daily Profit"),
+					Type:   ptr("vis"),
+					LookId: ptr("857"),
+				},
+			},
+		}
+		b, _ := json.Marshal(dash)
+		return json.Unmarshal(b, result)
+	}
+	if method == "GET" && path == "/dashboards/3190" {
+		dash := v4.Dashboard{
+			Id:    ptr("3190"),
+			Title: ptr("Look Tile Test Dashboard"),
+			DashboardElements: &[]v4.DashboardElement{
+				{
+					Id:     ptr("elem_look_1"),
+					Title:  ptr("September Cases by Individual"),
+					Type:   ptr("vis"),
+					LookId: ptr("101"),
+				},
+			},
+		}
 		b, _ := json.Marshal(dash)
 		return json.Unmarshal(b, result)
 	}
@@ -393,7 +434,45 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 		return json.Unmarshal(b, result)
 	}
 	if method == "GET" && path == "/looks/857" {
-		look := v4.Look{Id: ptr("857"), Title: ptr("Daily Profit")}
+		look := v4.LookWithQuery{
+			Id:    ptr("857"),
+			Title: ptr("Daily Profit"),
+			Query: &v4.Query{
+				Id:     ptr("query_456"),
+				Model:  "test_model",
+				View:   "test_view",
+				Fields: &[]string{"field1"},
+			},
+		}
+		b, _ := json.Marshal(look)
+		return json.Unmarshal(b, result)
+	}
+	if method == "GET" && path == "/looks/101" {
+		look := v4.LookWithQuery{
+			Id:    ptr("101"),
+			Title: ptr("September Cases by Individual"),
+			Query: &v4.Query{
+				Id:     ptr("query_101"),
+				Model:  "thelook",
+				View:   "orders",
+				Fields: &[]string{"orders.id", "orders.count"},
+			},
+		}
+		b, _ := json.Marshal(look)
+		return json.Unmarshal(b, result)
+	}
+	if method == "POST" && path == "/looks" {
+		bodyBytes, _ := json.Marshal(body)
+		var wl v4.WriteLookWithQuery
+		_ = json.Unmarshal(bodyBytes, &wl)
+		createdTitle := "Created Look"
+		if wl.Title != nil {
+			createdTitle = *wl.Title
+		}
+		look := v4.LookWithQuery{
+			Id:    ptr("new_look_created_1"),
+			Title: ptr(createdTitle),
+		}
 		b, _ := json.Marshal(look)
 		return json.Unmarshal(b, result)
 	}
@@ -401,8 +480,8 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 		b, _ := json.Marshal(m.folder801Looks)
 		return json.Unmarshal(b, result)
 	}
-	if method == "PATCH" && path == "/looks/857" {
-		look := v4.Look{Id: ptr("857"), Title: ptr("Daily Profit"), FolderId: ptr("801")}
+	if method == "PATCH" && strings.HasPrefix(path, "/looks/") {
+		look := v4.LookWithQuery{Id: ptr("857"), Title: ptr("Daily Profit"), FolderId: ptr("801")}
 		b, _ := json.Marshal(look)
 		return json.Unmarshal(b, result)
 	}
@@ -2838,6 +2917,304 @@ func TestDashboardImportWithResultMakerQueryCommand(t *testing.T) {
 	}
 	if ce.ResultMaker.DynamicFields == nil || *ce.ResultMaker.DynamicFields != "[{\"table_calculation\":\"calc_1\"}]" {
 		t.Errorf("expected element result_maker.dynamic_fields to be preserved, got %v", ce.ResultMaker.DynamicFields)
+	}
+}
+
+func TestDashboardCatWithLook(t *testing.T) {
+	doer := &mockDoer{t: t}
+	MockSDK = v4.NewLookerSDK(doer)
+	defer func() { MockSDK = nil }()
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	RootCmd.SetArgs([]string{"dashboard", "cat", "3190"})
+	err := RootCmd.Execute()
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	_ = w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := buf.String()
+
+	var dashMap map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &dashMap); err != nil {
+		t.Fatalf("failed to unmarshal output: %v", err)
+	}
+
+	elements, ok := dashMap["dashboard_elements"].([]interface{})
+	if !ok || len(elements) == 0 {
+		t.Fatalf("expected dashboard_elements in cat output")
+	}
+
+	elem, ok := elements[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected element to be map")
+	}
+
+	lookMap, ok := elem["look"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected element to have inlined look map, got: %v", elem["look"])
+	}
+
+	if lookMap["id"] != "101" {
+		t.Errorf("expected look id '101', got %v", lookMap["id"])
+	}
+	if lookMap["title"] != "September Cases by Individual" {
+		t.Errorf("expected look title 'September Cases by Individual', got %v", lookMap["title"])
+	}
+	queryMap, ok := lookMap["query"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected inlined look to have query map")
+	}
+	if queryMap["model"] != "thelook" || queryMap["view"] != "orders" {
+		t.Errorf("expected query model=thelook, view=orders, got %v, %v", queryMap["model"], queryMap["view"])
+	}
+}
+
+func TestDashboardImportLinkedToExistingLook(t *testing.T) {
+	doer := &mockDoer{
+		t: t,
+		folder801Looks: []v4.LookWithQuery{
+			{
+				Id:    ptr("new_look_205"),
+				Title: ptr("September Cases by Individual"),
+			},
+		},
+	}
+	MockSDK = v4.NewLookerSDK(doer)
+	defer func() {
+		MockSDK = nil
+		dashboardImportPlain = false
+	}()
+
+	dashJSON := `{
+  "title": "Import September Cases Dash",
+  "dashboard_elements": [
+    {
+      "id": "elem_sept_1",
+      "title": "September Cases by Individual",
+      "type": "vis",
+      "look_id": "old_look_101"
+    }
+  ],
+  "dashboard_layouts": [
+    {
+      "id": "layout_1",
+      "active": true,
+      "dashboard_layout_components": [
+        {
+          "id": "comp_1",
+          "dashboard_element_id": "elem_sept_1",
+          "element_title": "September Cases by Individual"
+        }
+      ]
+    }
+  ]
+}`
+
+	tmpFile, err := os.CreateTemp("", "dashboard_import_look_link_*.json")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+	if _, err := tmpFile.Write([]byte(dashJSON)); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	_ = tmpFile.Close()
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	RootCmd.SetArgs([]string{"dashboard", "import", tmpFile.Name(), "801", "--plain"})
+	err = RootCmd.Execute()
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	_ = w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := strings.TrimSpace(buf.String())
+
+	if out != "new_dash_1" {
+		t.Errorf("expected new_dash_1, got %s", out)
+	}
+
+	if len(doer.createdElements) != 1 {
+		t.Fatalf("expected 1 element created, got %d", len(doer.createdElements))
+	}
+	ce := doer.createdElements[0]
+	if ce.LookId == nil || *ce.LookId != "new_look_205" {
+		t.Errorf("expected element look_id='new_look_205', got %v", ce.LookId)
+	}
+	if ce.QueryId != nil {
+		t.Errorf("expected element query_id to be nil, got %v", *ce.QueryId)
+	}
+	if ce.ResultMaker != nil {
+		t.Errorf("expected element result_maker to be nil, got %v", ce.ResultMaker)
+	}
+}
+
+func TestDashboardImportWithEmbeddedLook(t *testing.T) {
+	doer := &mockDoer{t: t}
+	MockSDK = v4.NewLookerSDK(doer)
+	defer func() {
+		MockSDK = nil
+		dashboardImportPlain = false
+	}()
+
+	dashJSON := `{
+  "title": "Import Embedded Look Dash",
+  "dashboard_elements": [
+    {
+      "id": "elem_emb_1",
+      "title": "My Embedded Look",
+      "type": "vis",
+      "look_id": "old_101",
+      "look": {
+        "title": "My Embedded Look",
+        "query": {
+          "model": "thelook",
+          "view": "orders",
+          "fields": ["orders.id"]
+        }
+      }
+    }
+  ],
+  "dashboard_layouts": [
+    {
+      "id": "layout_1",
+      "active": true,
+      "dashboard_layout_components": [
+        {
+          "id": "comp_1",
+          "dashboard_element_id": "elem_emb_1",
+          "element_title": "My Embedded Look"
+        }
+      ]
+    }
+  ]
+}`
+
+	tmpFile, err := os.CreateTemp("", "dashboard_import_emb_look_*.json")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+	if _, err := tmpFile.Write([]byte(dashJSON)); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	_ = tmpFile.Close()
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	RootCmd.SetArgs([]string{"dashboard", "import", tmpFile.Name(), "801", "--plain"})
+	err = RootCmd.Execute()
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	_ = w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := strings.TrimSpace(buf.String())
+
+	if out != "new_dash_1" {
+		t.Errorf("expected new_dash_1, got %s", out)
+	}
+
+	if len(doer.createdQueries) != 1 {
+		t.Fatalf("expected 1 query created for embedded look, got %d", len(doer.createdQueries))
+	}
+	if len(doer.createdElements) != 1 {
+		t.Fatalf("expected 1 element created, got %d", len(doer.createdElements))
+	}
+	ce := doer.createdElements[0]
+	if ce.LookId == nil || *ce.LookId != "new_look_created_1" {
+		t.Errorf("expected element look_id='new_look_created_1', got %v", ce.LookId)
+	}
+	if ce.ResultMaker != nil {
+		t.Errorf("expected element result_maker to be nil, got %v", ce.ResultMaker)
+	}
+}
+
+func TestFolderExportEnriched(t *testing.T) {
+	doer := &mockDoer{t: t}
+	MockSDK = v4.NewLookerSDK(doer)
+	defer func() {
+		MockSDK = nil
+		folderExportDir = ""
+		folderExportTrim = false
+	}()
+
+	tmpDir, err := os.MkdirTemp("", "folder_export_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	RootCmd.SetArgs([]string{"folder", "export", "709", "--dir", tmpDir})
+	err = RootCmd.Execute()
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	_ = w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+
+	dashPath := filepath.Join(tmpDir, "Folder_709_Shared", "Dashboard_192_Daily Profit Dashboard.json")
+	dashBytes, err := os.ReadFile(dashPath)
+	if err != nil {
+		t.Fatalf("failed to read exported dashboard %s: %v", dashPath, err)
+	}
+
+	var dashMap map[string]interface{}
+	if err := json.Unmarshal(dashBytes, &dashMap); err != nil {
+		t.Fatalf("failed to unmarshal exported dashboard: %v", err)
+	}
+
+	elems, ok := dashMap["dashboard_elements"].([]interface{})
+	if !ok || len(elems) == 0 {
+		t.Fatalf("expected dashboard_elements in exported dashboard")
+	}
+
+	elemMap, ok := elems[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected element map")
+	}
+
+	lookMap, ok := elemMap["look"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected exported dashboard element to have enriched look map, got: %v", elemMap["look"])
+	}
+	if lookMap["id"] != "857" {
+		t.Errorf("expected look id '857', got %v", lookMap["id"])
+	}
+	if lookMap["title"] != "Daily Profit" {
+		t.Errorf("expected look title 'Daily Profit', got %v", lookMap["title"])
+	}
+
+	lookPath := filepath.Join(tmpDir, "Folder_709_Shared", "Look_857_Daily Profit.json")
+	if _, err := os.Stat(lookPath); os.IsNotExist(err) {
+		t.Errorf("expected Look_857_Daily Profit.json to exist at %s", lookPath)
 	}
 }
 

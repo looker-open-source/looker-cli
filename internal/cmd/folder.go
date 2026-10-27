@@ -530,11 +530,11 @@ func exportFolderDir(c *client.ClientWrapper, fID, baseDir string) error {
 	if folder.Looks != nil {
 		for _, l := range *folder.Looks {
 			if l.Id != nil {
-				look, err := c.SDK.Look(*l.Id, "", nil)
+				lookMap, err := CatLookHelper(c, *l.Id, folderExportTrim, false, "")
 				if err == nil {
-					lb, _ := json.MarshalIndent(look, "", "  ")
+					lb, _ := json.MarshalIndent(lookMap, "", "  ")
 					lt := ""
-					if look.Title != nil { lt = *look.Title }
+					if v, ok := lookMap["title"].(string); ok { lt = v }
 					_ = os.WriteFile(filepath.Join(dirName, fmt.Sprintf("Look_%s_%s.json", *l.Id, sanitizeFilename(lt))), lb, 0644)
 				}
 			}
@@ -543,11 +543,11 @@ func exportFolderDir(c *client.ClientWrapper, fID, baseDir string) error {
 	if folder.Dashboards != nil {
 		for _, d := range *folder.Dashboards {
 			if d.Id != nil {
-				dash, err := c.SDK.Dashboard(*d.Id, "", nil)
+				dashMap, err := CatDashboardHelper(c, *d.Id, folderExportTrim, false, "")
 				if err == nil {
-					db, _ := json.MarshalIndent(dash, "", "  ")
+					db, _ := json.MarshalIndent(dashMap, "", "  ")
 					dt := ""
-					if dash.Title != nil { dt = *dash.Title }
+					if v, ok := dashMap["title"].(string); ok { dt = v }
 					_ = os.WriteFile(filepath.Join(dirName, fmt.Sprintf("Dashboard_%s_%s.json", *d.Id, sanitizeFilename(dt))), db, 0644)
 				}
 			}
@@ -586,11 +586,11 @@ func exportFolderArchive(c *client.ClientWrapper, fID string, archiver interface
 	if folder.Looks != nil {
 		for _, l := range *folder.Looks {
 			if l.Id != nil {
-				look, err := c.SDK.Look(*l.Id, "", nil)
+				lookMap, err := CatLookHelper(c, *l.Id, folderExportTrim, false, "")
 				if err == nil {
-					lb, _ := json.MarshalIndent(look, "", "  ")
+					lb, _ := json.MarshalIndent(lookMap, "", "  ")
 					lt := ""
-					if look.Title != nil { lt = *look.Title }
+					if v, ok := lookMap["title"].(string); ok { lt = v }
 					lfn := dirName + fmt.Sprintf("Look_%s_%s.json", *l.Id, sanitizeFilename(lt))
 					writeArchiveFile(archiver, lfn, lb)
 				}
@@ -600,11 +600,11 @@ func exportFolderArchive(c *client.ClientWrapper, fID string, archiver interface
 	if folder.Dashboards != nil {
 		for _, d := range *folder.Dashboards {
 			if d.Id != nil {
-				dash, err := c.SDK.Dashboard(*d.Id, "", nil)
+				dashMap, err := CatDashboardHelper(c, *d.Id, folderExportTrim, false, "")
 				if err == nil {
-					db, _ := json.MarshalIndent(dash, "", "  ")
+					db, _ := json.MarshalIndent(dashMap, "", "  ")
 					dt := ""
-					if dash.Title != nil { dt = *dash.Title }
+					if v, ok := dashMap["title"].(string); ok { dt = v }
 					dfn := dirName + fmt.Sprintf("Dashboard_%s_%s.json", *d.Id, sanitizeFilename(dt))
 					writeArchiveFile(archiver, dfn, db)
 				}

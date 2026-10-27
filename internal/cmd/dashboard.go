@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/util"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/spf13/cobra"
@@ -47,65 +48,57 @@ var DashboardCmd = &cobra.Command{
 	Short: "Commands pertaining to dashboards",
 }
 
-var dashboardCatCmd = &cobra.Command{
-	Use:   "cat [DASHBOARD_ID]",
-	Short: "output json describing a dashboard",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		c, err := initClient(cmd.Context(), false)
-		if err != nil {
-			return err
-		}
-		dID := args[0]
-		dash, err := c.SDK.Dashboard(dID, dashboardCatFields, nil)
-		if err != nil {
-			return fmt.Errorf("failed to get dashboard %s: %w", dID, err)
-		}
+func CatDashboardHelper(c *client.ClientWrapper, dID string, trim bool, plans bool, fields string) (map[string]interface{}, error) {
+	dash, err := c.SDK.Dashboard(dID, fields, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get dashboard %s: %w", dID, err)
+	}
 
-		b, _ := json.Marshal(dash)
-		var m map[string]interface{}
-		_ = json.Unmarshal(b, &m)
+	b, _ := json.Marshal(dash)
+	var m map[string]interface{}
+	_ = json.Unmarshal(b, &m)
 
-		// Looker returns no style for dashboards that render as classic, while new
-		// dashboards default to modern. Record it so an import keeps the same look.
-		if _, ok := m["style"]; !ok && dashboardCatFields == "" {
-			m["style"] = "classic"
-		}
+	// Looker returns no style for dashboards that render as classic, while new
+	// dashboards default to modern. Record it so an import keeps the same look.
+	if _, ok := m["style"]; !ok && fields == "" {
+		m["style"] = "classic"
+	}
 
-		if dashboardCatPlans {
-			plans, _ := c.SDK.ScheduledPlansForDashboard(v4.RequestScheduledPlansForDashboard{DashboardId: dID, AllUsers: ptrBool(true)}, nil)
-			m["scheduled_plans"] = plans
-		}
+	if plans {
+		p, _ := c.SDK.ScheduledPlansForDashboard(v4.RequestScheduledPlansForDashboard{DashboardId: dID, AllUsers: ptrBool(true)}, nil)
+		m["scheduled_plans"] = p
+	}
 
-		alerts, _ := c.SDK.SearchAlerts(v4.RequestSearchAlerts{GroupBy: ptr("dashboard"), AllOwners: ptrBool(true)}, nil)
-		if len(alerts) > 0 && dash.DashboardElements != nil {
-			elemAlerts := make(map[string][]v4.Alert)
-			for _, a := range alerts {
-				if a.DashboardElementId != nil {
-					eID := *a.DashboardElementId
-					elemAlerts[eID] = append(elemAlerts[eID], a)
-				}
-			}
-			if elements, ok := m["dashboard_elements"].([]interface{}); ok {
-				for i, ev := range elements {
-					if em, ok := ev.(map[string]interface{}); ok {
-						if idVal, ok := em["id"].(float64); ok {
-							eID := strconv.FormatInt(int64(idVal), 10)
-							if aList, ok := elemAlerts[eID]; ok {
-								em["alerts"] = aList
-							}
-						}
-						elements[i] = em
-					}
-				}
+	alerts, _ := c.SDK.SearchAlerts(v4.RequestSearchAlerts{GroupBy: ptr("dashboard"), AllOwners: ptrBool(true)}, nil)
+	if len(alerts) > 0 && dash.DashboardElements != nil {
+		elemAlerts := make(map[string][]v4.Alert)
+		for _, a := range alerts {
+			if a.DashboardElementId != nil {
+				eID := *a.DashboardElementId
+				elemAlerts[eID] = append(elemAlerts[eID], a)
 			}
 		}
 		if elements, ok := m["dashboard_elements"].([]interface{}); ok {
 			for i, ev := range elements {
 				if em, ok := ev.(map[string]interface{}); ok {
-					if mergeResultIDVal, ok := em["merge_result_id"]; ok && mergeResultIDVal != nil {
-						mergeResultID := idToStr(mergeResultIDVal)
-						if mergeResultID != "" {
+					if idVal, ok := em["id"].(float64); ok {
+						eID := strconv.FormatInt(int64(idVal), 10)
+						if aList, ok := elemAlerts[eID]; ok {
+							em["alerts"] = aList
+						}
+					}
+					elements[i] = em
+				}
+			}
+		}
+	}
+	if elements, ok := m["dashboard_elements"].([]interface{}); ok {
+		for i, ev := range elements {
+			if em, ok := ev.(map[string]interface{}); ok {
+				if mergeResultIDVal, ok := em["merge_result_id"]; ok && mergeResultIDVal != nil {
+					mergeResultID := idToStr(mergeResultIDVal)
+					if mergeResultID != "" {
+						if _, hasMR := em["merge_result"]; !hasMR {
 							mq, err := c.SDK.MergeQuery(mergeResultID, "", nil)
 							if err == nil {
 								mqBytes, _ := json.Marshal(mq)
@@ -142,118 +135,154 @@ var dashboardCatCmd = &cobra.Command{
 						}
 					}
 				}
+				if lookIDVal, ok := em["look_id"]; ok && lookIDVal != nil {
+					lookID := idToStr(lookIDVal)
+					if lookID != "" {
+						if _, hasLook := em["look"]; !hasLook {
+							look, err := c.SDK.Look(lookID, "", nil)
+							if err == nil {
+								lookBytes, _ := json.Marshal(look)
+								var lookMap map[string]interface{}
+								_ = json.Unmarshal(lookBytes, &lookMap)
+								em["look"] = lookMap
+								elements[i] = em
+							} else {
+								fmt.Fprintf(os.Stderr, "failed to get look %s: %v\n", lookID, err)
+							}
+						}
+					}
+				}
 			}
-			m["dashboard_elements"] = elements
+		}
+		m["dashboard_elements"] = elements
+	}
+
+	if trim {
+		keepDash := map[string]bool{
+			"id":                    true,
+			"title":                 true,
+			"description":           true,
+			"background_color":      true,
+			"show_title":            true,
+			"title_color":           true,
+			"show_filters_bar":      true,
+			"tile_background_color": true,
+			"tile_text_color":       true,
+			"text_tile_text_color":  true,
+			"crossfilter_enabled":   true,
+			"preferred_viewer":      true,
+			"style":                 true,
+			"slug":                  true,
+			"folder_id":             true,
+			"user_id":               true,
+			"dashboard_elements":    true,
+			"dashboard_filters":     true,
+			"dashboard_layouts":     true,
+			"scheduled_plans":       true,
+		}
+		for k := range m {
+			if !keepDash[k] {
+				delete(m, k)
+			}
 		}
 
-		if dashboardCatTrim {
-			keepDash := map[string]bool{
-				"id":                    true,
-				"title":                 true,
-				"description":           true,
-				"background_color":      true,
-				"show_title":            true,
-				"title_color":           true,
-				"show_filters_bar":      true,
-				"tile_background_color": true,
-				"tile_text_color":       true,
-				"text_tile_text_color":  true,
-				"crossfilter_enabled":   true,
-				"preferred_viewer":      true,
-				"style":                 true,
-				"slug":                  true,
-				"folder_id":             true,
-				"user_id":               true,
-				"dashboard_elements":    true,
-				"dashboard_filters":     true,
-				"dashboard_layouts":     true,
-				"scheduled_plans":       true,
-			}
-			for k := range m {
-				if !keepDash[k] {
-					delete(m, k)
+		if elements, ok := m["dashboard_elements"].([]interface{}); ok {
+			for i, ev := range elements {
+				if em, ok := ev.(map[string]interface{}); ok {
+					keepElem := map[string]bool{
+						"id":                true,
+						"body_text":         true,
+						"subtitle_text":     true,
+						"title":             true,
+						"title_hidden":      true,
+						"title_text":        true,
+						"type":              true,
+						"rich_content_json": true,
+						"extension_id":      true,
+						"aria_description":  true,
+						"look_id":           true,
+						"query_id":          true,
+						"merge_result_id":   true,
+						"result_maker_id":   true,
+						"result_maker":      true,
+						"look":              true,
+						"query":             true,
+						"merge_result":      true,
+						"alerts":            true,
+					}
+					for k := range em {
+						if !keepElem[k] {
+							delete(em, k)
+						}
+					}
+					elements[i] = em
 				}
 			}
+		}
+		if filters, ok := m["dashboard_filters"].([]interface{}); ok {
+			for i, fv := range filters {
+				if fm, ok := fv.(map[string]interface{}); ok {
+					delete(fm, "id")
+					delete(fm, "dashboard_id")
+					delete(fm, "can")
+					delete(fm, "field")
+					filters[i] = fm
+				}
+			}
+		}
+		if layouts, ok := m["dashboard_layouts"].([]interface{}); ok {
+			for i, lv := range layouts {
+				if lm, ok := lv.(map[string]interface{}); ok {
+					keepLayout := map[string]bool{
+						"id":                          true,
+						"type":                        true,
+						"active":                      true,
+						"column_width":                true,
+						"width":                       true,
+						"label":                       true,
+						"description":                 true,
+						"order":                       true,
+						"lookml_link_id":              true,
+						"dashboard_layout_components": true,
+					}
+					for k := range lm {
+						if !keepLayout[k] {
+							delete(lm, k)
+						}
+					}
+					if components, ok := lm["dashboard_layout_components"].([]interface{}); ok {
+						for j, cv := range components {
+							if cm, ok := cv.(map[string]interface{}); ok {
+								delete(cm, "can")
+								delete(cm, "element_title")
+								delete(cm, "element_title_hidden")
+								delete(cm, "vis_type")
+								components[j] = cm
+							}
+						}
+					}
+					layouts[i] = lm
+				}
+			}
+		}
+	}
 
-			if elements, ok := m["dashboard_elements"].([]interface{}); ok {
-				for i, ev := range elements {
-					if em, ok := ev.(map[string]interface{}); ok {
-						keepElem := map[string]bool{
-							"id":                true,
-							"body_text":         true,
-							"subtitle_text":     true,
-							"title":             true,
-							"title_hidden":      true,
-							"title_text":        true,
-							"type":              true,
-							"rich_content_json": true,
-							"extension_id":      true,
-							"aria_description":  true,
-							"look_id":           true,
-							"query_id":          true,
-							"merge_result_id":   true,
-							"result_maker_id":   true,
-							"result_maker":      true,
-							"look":              true,
-							"query":             true,
-							"merge_result":      true,
-							"alerts":            true,
-						}
-						for k := range em {
-							if !keepElem[k] {
-								delete(em, k)
-							}
-						}
-						elements[i] = em
-					}
-				}
-			}
-			if filters, ok := m["dashboard_filters"].([]interface{}); ok {
-				for i, fv := range filters {
-					if fm, ok := fv.(map[string]interface{}); ok {
-						delete(fm, "id")
-						delete(fm, "dashboard_id")
-						delete(fm, "can")
-						delete(fm, "field")
-						filters[i] = fm
-					}
-				}
-			}
-			if layouts, ok := m["dashboard_layouts"].([]interface{}); ok {
-				for i, lv := range layouts {
-					if lm, ok := lv.(map[string]interface{}); ok {
-						keepLayout := map[string]bool{
-							"id":                          true,
-							"type":                        true,
-							"active":                      true,
-							"column_width":                true,
-							"width":                       true,
-							"label":                       true,
-							"description":                 true,
-							"order":                       true,
-							"lookml_link_id":              true,
-							"dashboard_layout_components": true,
-						}
-						for k := range lm {
-							if !keepLayout[k] {
-								delete(lm, k)
-							}
-						}
-						if components, ok := lm["dashboard_layout_components"].([]interface{}); ok {
-							for j, cv := range components {
-								if cm, ok := cv.(map[string]interface{}); ok {
-									delete(cm, "can")
-									delete(cm, "element_title")
-									delete(cm, "element_title_hidden")
-									delete(cm, "vis_type")
-									components[j] = cm
-								}
-							}
-						}
-						layouts[i] = lm
-					}
-				}
-			}
+	return m, nil
+}
+
+var dashboardCatCmd = &cobra.Command{
+	Use:   "cat [DASHBOARD_ID]",
+	Short: "output json describing a dashboard",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := initClient(cmd.Context(), false)
+		if err != nil {
+			return err
+		}
+		dID := args[0]
+		m, err := CatDashboardHelper(c, dID, dashboardCatTrim, dashboardCatPlans, dashboardCatFields)
+		if err != nil {
+			return err
 		}
 
 		replacements := make(map[string]string)
@@ -654,6 +683,18 @@ var dashboardImportCmd = &cobra.Command{
 							if cfgDebug {
 								fmt.Fprintf(os.Stderr, "Importing %d dashboard layout components\n", len(componentsVal))
 							}
+							var cachedFolderLooks []v4.LookWithQuery
+							var folderLooksFetched bool
+							getFolderLooks := func() []v4.LookWithQuery {
+								if !folderLooksFetched {
+									folderLooksFetched = true
+									fls, err := c.SDK.FolderLooks(folderID, "", nil)
+									if err == nil {
+										cachedFolderLooks = fls
+									}
+								}
+								return cachedFolderLooks
+							}
 							matchedElems := make(map[int]bool)
 							for cIdx, cv := range componentsVal {
 								cb, _ := json.Marshal(cv)
@@ -720,14 +761,10 @@ var dashboardImportCmd = &cobra.Command{
 									wde.QueryId = nil
 									wde.MergeResultId = nil
 
-									qVal, hasQuery := elemMap["query"].(map[string]interface{})
-									if !hasQuery {
-										if rmVal, ok := elemMap["result_maker"].(map[string]interface{}); ok {
-											qVal, hasQuery = rmVal["query"].(map[string]interface{})
-										}
-									}
+									lookVal, hasLook := elemMap["look"].(map[string]interface{})
+									lookIDVal, hasLookID := elemMap["look_id"]
 
-									if lookVal, ok := elemMap["look"].(map[string]interface{}); ok {
+									if hasLook {
 										if qMap, ok := lookVal["query"].(map[string]interface{}); ok {
 											delete(qMap, "client_id")
 										}
@@ -735,25 +772,91 @@ var dashboardImportCmd = &cobra.Command{
 										if err == nil && lID != "" {
 											wde.LookId = &lID
 											wde.ResultMaker = nil
+											folderLooksFetched = false
 										} else if err != nil {
 											fmt.Fprintf(os.Stderr, "UpsertLookHelper failed: %v\n", err)
 										}
-									} else if hasQuery {
-										qb, _ := json.Marshal(qVal)
-										var wq v4.WriteQuery
-										_ = json.Unmarshal(qb, &wq)
-										wq.ClientId = nil
-										cq, err := c.SDK.CreateQuery(wq, "", nil)
-										if err == nil && cq.Id != nil {
-											wde.QueryId = cq.Id
-											if wde.ResultMaker != nil {
-												wde.ResultMaker.SqlQueryId = nil
-												wde.ResultMaker.Query = nil
-											}
-										} else if err != nil {
-											fmt.Fprintf(os.Stderr, "CreateQuery failed: %v\n", err)
+									}
+
+									if wde.LookId == nil && (hasLook || (hasLookID && lookIDVal != nil)) {
+										elemTitle := ""
+										if v, ok := elemMap["title"].(string); ok && v != "" {
+											elemTitle = v
+										} else if v, ok := elemMap["title_text"].(string); ok && v != "" {
+											elemTitle = v
 										}
-									} else if mVal, ok := elemMap["merge_result"].(map[string]interface{}); ok {
+										if hasLook {
+											if v, ok := lookVal["title"].(string); ok && v != "" {
+												elemTitle = v
+											}
+										}
+										elemSlug := ""
+										if v, ok := elemMap["slug"].(string); ok && v != "" {
+											elemSlug = v
+										}
+										if hasLook {
+											if v, ok := lookVal["slug"].(string); ok && v != "" {
+												elemSlug = v
+											} else if v, ok := lookVal["public_slug"].(string); ok && v != "" {
+												elemSlug = v
+											}
+										}
+
+										folderLooks := getFolderLooks()
+										for _, fl := range folderLooks {
+											if elemSlug != "" && fl.PublicSlug != nil && *fl.PublicSlug == elemSlug && fl.Id != nil {
+												matchID := *fl.Id
+												wde.LookId = &matchID
+												wde.ResultMaker = nil
+												break
+											}
+											if elemTitle != "" && fl.Title != nil && *fl.Title == elemTitle && fl.Id != nil {
+												matchID := *fl.Id
+												wde.LookId = &matchID
+												wde.ResultMaker = nil
+												break
+											}
+										}
+
+										if wde.LookId == nil && hasLookID && lookIDVal != nil {
+											lookID := idToStr(lookIDVal)
+											if lookID != "" {
+												targetLook, err := c.SDK.Look(lookID, "id", nil)
+												if err == nil && targetLook.Id != nil {
+													wde.LookId = targetLook.Id
+													wde.ResultMaker = nil
+												} else {
+													wde.LookId = &lookID
+													wde.ResultMaker = nil
+												}
+											}
+										}
+									}
+
+									if wde.LookId == nil {
+										qVal, hasQuery := elemMap["query"].(map[string]interface{})
+										if !hasQuery {
+											if rmVal, ok := elemMap["result_maker"].(map[string]interface{}); ok {
+												qVal, hasQuery = rmVal["query"].(map[string]interface{})
+											}
+										}
+
+										if hasQuery {
+											qb, _ := json.Marshal(qVal)
+											var wq v4.WriteQuery
+											_ = json.Unmarshal(qb, &wq)
+											wq.ClientId = nil
+											cq, err := c.SDK.CreateQuery(wq, "", nil)
+											if err == nil && cq.Id != nil {
+												wde.QueryId = cq.Id
+												if wde.ResultMaker != nil {
+													wde.ResultMaker.SqlQueryId = nil
+													wde.ResultMaker.Query = nil
+												}
+											} else if err != nil {
+												fmt.Fprintf(os.Stderr, "CreateQuery failed: %v\n", err)
+											}
+										} else if mVal, ok := elemMap["merge_result"].(map[string]interface{}); ok {
 										if sourceQueries, ok := mVal["source_queries"].([]interface{}); ok {
 											for sqIdx, sqv := range sourceQueries {
 												if sq, ok := sqv.(map[string]interface{}); ok {
@@ -788,6 +891,7 @@ var dashboardImportCmd = &cobra.Command{
 											fmt.Fprintf(os.Stderr, "CreateMergeQuery failed: %v\n", err)
 										}
 									}
+								}
 
 									reqElem := v4.RequestCreateDashboardElement{Body: wde}
 									createdElem, err := c.SDK.CreateDashboardElement(reqElem, nil)

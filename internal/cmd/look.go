@@ -45,6 +45,124 @@ var LookCmd = &cobra.Command{
 
 func ptrBool(b bool) *bool { return &b }
 
+func CatLookHelper(c *client.ClientWrapper, lID string, trim bool, plans bool, fields string) (map[string]interface{}, error) {
+	look, err := c.SDK.Look(lID, fields, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get look %s: %w", lID, err)
+	}
+
+	b, _ := json.Marshal(look)
+	var m map[string]interface{}
+	_ = json.Unmarshal(b, &m)
+
+	if plans {
+		p, _ := c.SDK.ScheduledPlansForLook(v4.RequestScheduledPlansForLook{LookId: lID, AllUsers: ptrBool(true)}, nil)
+		m["scheduled_plans"] = p
+	}
+
+	if trim {
+		keepLook := map[string]bool{
+			"id":              true,
+			"title":           true,
+			"description":     true,
+			"is_run_on_load":  true,
+			"public":          true,
+			"query_id":        true,
+			"folder_id":       true,
+			"user_id":         true,
+			"query":           true,
+			"scheduled_plans": true,
+		}
+		for k := range m {
+			if !keepLook[k] {
+				delete(m, k)
+			}
+		}
+
+		if qVal, ok := m["query"].(map[string]interface{}); ok {
+			keepQuery := map[string]bool{
+				"id":                  true,
+				"model":               true,
+				"view":                true,
+				"fields":              true,
+				"pivots":              true,
+				"fill_fields":         true,
+				"filters":             true,
+				"filter_expression":   true,
+				"sorts":               true,
+				"limit":               true,
+				"column_limit":        true,
+				"total":               true,
+				"row_total":           true,
+				"subtotals":           true,
+				"vis_config":          true,
+				"filter_config":       true,
+				"visible_ui_sections": true,
+				"dynamic_fields":      true,
+				"query_timezone":      true,
+			}
+			for k := range qVal {
+				if !keepQuery[k] {
+					delete(qVal, k)
+				}
+			}
+		}
+
+		if pVal, ok := m["scheduled_plans"].([]interface{}); ok {
+			keepPlan := map[string]bool{
+				"id":                         true,
+				"name":                       true,
+				"user_id":                    true,
+				"run_as_recipient":           true,
+				"enabled":                    true,
+				"look_id":                    true,
+				"dashboard_id":               true,
+				"filters_string":             true,
+				"require_results":            true,
+				"require_no_results":         true,
+				"require_change":             true,
+				"send_all_results":           true,
+				"crontab":                    true,
+				"datagroup":                  true,
+				"timezone":                   true,
+				"scheduled_plan_destination": true,
+				"run_once":                   true,
+				"include_links":              true,
+				"custom_url_base":            true,
+				"custom_url_params":          true,
+				"custom_url_label":           true,
+				"show_custom_url":            true,
+				"pdf_paper_size":             true,
+				"pdf_landscape":              true,
+				"color_theme":                true,
+				"long_tables":                true,
+				"inline_table_width":         true,
+			}
+			for i, pv := range pVal {
+				if pm, ok := pv.(map[string]interface{}); ok {
+					for k := range pm {
+						if !keepPlan[k] {
+							delete(pm, k)
+						}
+					}
+					if destVal, ok := pm["scheduled_plan_destination"].([]interface{}); ok {
+						for _, dv := range destVal {
+							if dm, ok := dv.(map[string]interface{}); ok {
+								delete(dm, "id")
+								delete(dm, "scheduled_plan_id")
+								delete(dm, "looker_recipient")
+								delete(dm, "can")
+							}
+						}
+					}
+					pVal[i] = pm
+				}
+			}
+		}
+	}
+	return m, nil
+}
+
 var lookCatCmd = &cobra.Command{
 	Use:   "cat [LOOK_ID]",
 	Short: "output json describing a look",
@@ -55,119 +173,9 @@ var lookCatCmd = &cobra.Command{
 			return err
 		}
 		lID := args[0]
-		look, err := c.SDK.Look(lID, lookCatFields, nil)
+		m, err := CatLookHelper(c, lID, lookCatTrim, lookCatPlans, lookCatFields)
 		if err != nil {
-			return fmt.Errorf("failed to get look %s: %w", lID, err)
-		}
-
-		b, _ := json.Marshal(look)
-		var m map[string]interface{}
-		_ = json.Unmarshal(b, &m)
-
-		if lookCatPlans {
-			plans, _ := c.SDK.ScheduledPlansForLook(v4.RequestScheduledPlansForLook{LookId: lID, AllUsers: ptrBool(true)}, nil)
-			m["scheduled_plans"] = plans
-		}
-
-		if lookCatTrim {
-			keepLook := map[string]bool{
-				"id":             true,
-				"title":          true,
-				"description":    true,
-				"is_run_on_load": true,
-				"public":         true,
-				"query_id":       true,
-				"folder_id":      true,
-				"user_id":        true,
-				"query":          true,
-				"scheduled_plans": true,
-			}
-			for k := range m {
-				if !keepLook[k] {
-					delete(m, k)
-				}
-			}
-
-			if qVal, ok := m["query"].(map[string]interface{}); ok {
-				keepQuery := map[string]bool{
-					"id":                true,
-					"model":             true,
-					"view":              true,
-					"fields":            true,
-					"pivots":            true,
-					"fill_fields":       true,
-					"filters":           true,
-					"filter_expression": true,
-					"sorts":             true,
-					"limit":             true,
-					"column_limit":      true,
-					"total":             true,
-					"row_total":         true,
-					"subtotals":         true,
-					"vis_config":        true,
-					"filter_config":     true,
-					"visible_ui_sections": true,
-					"dynamic_fields":    true,
-					"query_timezone":    true,
-				}
-				for k := range qVal {
-					if !keepQuery[k] {
-						delete(qVal, k)
-					}
-				}
-			}
-
-			if pVal, ok := m["scheduled_plans"].([]interface{}); ok {
-				keepPlan := map[string]bool{
-					"id":               true,
-					"name":             true,
-					"user_id":          true,
-					"run_as_recipient": true,
-					"enabled":          true,
-					"look_id":          true,
-					"dashboard_id":     true,
-					"filters_string":   true,
-					"require_results":  true,
-					"require_no_results": true,
-					"require_change":   true,
-					"send_all_results": true,
-					"crontab":          true,
-					"datagroup":        true,
-					"timezone":         true,
-					"scheduled_plan_destination": true,
-					"run_once":         true,
-					"include_links":    true,
-					"custom_url_base":  true,
-					"custom_url_params": true,
-					"custom_url_label": true,
-					"show_custom_url":  true,
-					"pdf_paper_size":   true,
-					"pdf_landscape":    true,
-					"color_theme":      true,
-					"long_tables":      true,
-					"inline_table_width": true,
-				}
-				for i, pv := range pVal {
-					if pm, ok := pv.(map[string]interface{}); ok {
-						for k := range pm {
-							if !keepPlan[k] {
-								delete(pm, k)
-							}
-						}
-						if destVal, ok := pm["scheduled_plan_destination"].([]interface{}); ok {
-							for _, dv := range destVal {
-								if dm, ok := dv.(map[string]interface{}); ok {
-									delete(dm, "id")
-									delete(dm, "scheduled_plan_id")
-									delete(dm, "looker_recipient")
-									delete(dm, "can")
-								}
-							}
-						}
-						pVal[i] = pm
-					}
-				}
-			}
+			return err
 		}
 
 		outBytes, _ := json.MarshalIndent(m, "", "  ")
@@ -341,8 +349,40 @@ var lookImportCmd = &cobra.Command{
 }
 
 func UpsertLookHelper(c *client.ClientWrapper, folderID, myID string, m map[string]interface{}, force bool) (string, error) {
+	title := ""
+	if v, ok := m["title"].(string); ok { title = v }
+	slug := ""
+	if v, ok := m["slug"].(string); ok { slug = v }
+	if slug == "" {
+		if v, ok := m["public_slug"].(string); ok { slug = v }
+	}
+
+	var existingLook *v4.LookWithQuery
+	folderLooks, err := c.SDK.FolderLooks(folderID, "", nil)
+	if err == nil {
+		for _, fl := range folderLooks {
+			if slug != "" && fl.PublicSlug != nil && *fl.PublicSlug == slug {
+				match := fl
+				existingLook = &match
+				break
+			}
+			if title != "" && fl.Title != nil && *fl.Title == title {
+				match := fl
+				existingLook = &match
+				break
+			}
+		}
+	}
+
+	if existingLook != nil && !force {
+		return *existingLook.Id, nil
+	}
+
 	qVal, ok := m["query"].(map[string]interface{})
 	if !ok {
+		if existingLook != nil {
+			return *existingLook.Id, nil
+		}
 		return "", fmt.Errorf("look missing query")
 	}
 	qb, _ := json.Marshal(qVal)
@@ -355,38 +395,16 @@ func UpsertLookHelper(c *client.ClientWrapper, folderID, myID string, m map[stri
 	}
 	qID := *createdQuery.Id
 
-	title := ""
-	if v, ok := m["title"].(string); ok { title = v }
-	slug := ""
-	if v, ok := m["slug"].(string); ok { slug = v }
-
-	var existingLook *v4.LookWithQuery
-	folderLooks, err := c.SDK.FolderLooks(folderID, "", nil)
-	if err == nil {
-		for _, fl := range folderLooks {
-			if slug != "" && fl.PublicSlug != nil && *fl.PublicSlug == slug {
-				existingLook = &fl
-				break
-			}
-			if title != "" && fl.Title != nil && *fl.Title == title {
-				existingLook = &fl
-				break
-			}
-		}
-	}
-
 	lb, _ := json.Marshal(m)
 	var wl v4.WriteLookWithQuery
 	_ = json.Unmarshal(lb, &wl)
 	wl.QueryId = &qID
 	wl.FolderId = &folderID
 	wl.UserId = &myID
+	wl.Query = nil
 
 	var resultLook *v4.LookWithQuery
 	if existingLook != nil {
-		if !force {
-			return "", fmt.Errorf("look '%s' already exists in folder %s", title, folderID)
-		}
 		elID := *existingLook.Id
 		updated, err := c.SDK.UpdateLook(elID, wl, "", nil)
 		if err != nil {
