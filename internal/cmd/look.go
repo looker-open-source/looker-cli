@@ -266,13 +266,16 @@ var lookImportCmd = &cobra.Command{
 
 		folderLooks, err := c.SDK.FolderLooks(folderID, "", nil)
 		if err == nil {
-			for _, fl := range folderLooks {
+			for i, fl := range folderLooks {
+				if fl.Id == nil {
+					continue
+				}
 				if slug != "" && fl.PublicSlug != nil && *fl.PublicSlug == slug {
-					existingLook = &fl
+					existingLook = &folderLooks[i]
 					break
 				}
 				if title != "" && fl.Title != nil && *fl.Title == title {
-					existingLook = &fl
+					existingLook = &folderLooks[i]
 					break
 				}
 			}
@@ -360,15 +363,16 @@ func UpsertLookHelper(c *client.ClientWrapper, folderID, myID string, m map[stri
 	var existingLook *v4.LookWithQuery
 	folderLooks, err := c.SDK.FolderLooks(folderID, "", nil)
 	if err == nil {
-		for _, fl := range folderLooks {
+		for i, fl := range folderLooks {
+			if fl.Id == nil {
+				continue
+			}
 			if slug != "" && fl.PublicSlug != nil && *fl.PublicSlug == slug {
-				match := fl
-				existingLook = &match
+				existingLook = &folderLooks[i]
 				break
 			}
 			if title != "" && fl.Title != nil && *fl.Title == title {
-				match := fl
-				existingLook = &match
+				existingLook = &folderLooks[i]
 				break
 			}
 		}

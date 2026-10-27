@@ -691,6 +691,8 @@ var dashboardImportCmd = &cobra.Command{
 									fls, err := c.SDK.FolderLooks(folderID, "", nil)
 									if err == nil {
 										cachedFolderLooks = fls
+									} else {
+										fmt.Fprintf(os.Stderr, "warning: failed to fetch folder looks: %v\n", err)
 									}
 								}
 								return cachedFolderLooks

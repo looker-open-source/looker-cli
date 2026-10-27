@@ -536,6 +536,8 @@ func exportFolderDir(c *client.ClientWrapper, fID, baseDir string) error {
 					lt := ""
 					if v, ok := lookMap["title"].(string); ok { lt = v }
 					_ = os.WriteFile(filepath.Join(dirName, fmt.Sprintf("Look_%s_%s.json", *l.Id, sanitizeFilename(lt))), lb, 0644)
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to export look %s: %v\n", *l.Id, err)
 				}
 			}
 		}
@@ -549,6 +551,8 @@ func exportFolderDir(c *client.ClientWrapper, fID, baseDir string) error {
 					dt := ""
 					if v, ok := dashMap["title"].(string); ok { dt = v }
 					_ = os.WriteFile(filepath.Join(dirName, fmt.Sprintf("Dashboard_%s_%s.json", *d.Id, sanitizeFilename(dt))), db, 0644)
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to export dashboard %s: %v\n", *d.Id, err)
 				}
 			}
 		}
@@ -593,6 +597,8 @@ func exportFolderArchive(c *client.ClientWrapper, fID string, archiver interface
 					if v, ok := lookMap["title"].(string); ok { lt = v }
 					lfn := dirName + fmt.Sprintf("Look_%s_%s.json", *l.Id, sanitizeFilename(lt))
 					writeArchiveFile(archiver, lfn, lb)
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to export look %s to archive: %v\n", *l.Id, err)
 				}
 			}
 		}
@@ -607,6 +613,8 @@ func exportFolderArchive(c *client.ClientWrapper, fID string, archiver interface
 					if v, ok := dashMap["title"].(string); ok { dt = v }
 					dfn := dirName + fmt.Sprintf("Dashboard_%s_%s.json", *d.Id, sanitizeFilename(dt))
 					writeArchiveFile(archiver, dfn, db)
+				} else {
+					fmt.Fprintf(os.Stderr, "failed to export dashboard %s to archive: %v\n", *d.Id, err)
 				}
 			}
 		}
