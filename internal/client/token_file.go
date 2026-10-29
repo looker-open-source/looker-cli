@@ -36,6 +36,10 @@ type TokenEntry struct {
 	RefreshToken      string `json:"refresh_token,omitempty"`
 	RefreshExpiration string `json:"refresh_expiration,omitempty"`
 	ClientID          string `json:"client_id,omitempty"`
+	// Impersonated is true only for tokens issued by login_user for an --su
+	// target. Entries stored under an su user key without this flag are never
+	// trusted as impersonation tokens.
+	Impersonated bool `json:"impersonated,omitempty"`
 }
 
 type HostTokens map[string]TokenEntry
@@ -201,6 +205,19 @@ func IsRefreshTokenExpired(refreshExpiration, accessExpiration string) bool {
 }
 
 func StoreToken(host, suUser, token, refreshToken, clientID string, expiration time.Time) error {
+	return storeToken(host, suUser, token, refreshToken, clientID, expiration, false)
+}
+
+// StoreImpersonationToken stores a token obtained via login_user for suUser.
+// Only tokens stored through this function are reused for --su sessions.
+func StoreImpersonationToken(host, suUser, token string, expiration time.Time) error {
+	if suUser == "" {
+		return fmt.Errorf("impersonation token requires a target user")
+	}
+	return storeToken(host, suUser, token, "", "", expiration, true)
+}
+
+func storeToken(host, suUser, token, refreshToken, clientID string, expiration time.Time, impersonated bool) error {
 	host = util.CleanHost(host)
 	data, err := ReadTokenData()
 	if err != nil {
@@ -240,6 +257,7 @@ func StoreToken(host, suUser, token, refreshToken, clientID string, expiration t
 		RefreshToken:      refreshToken,
 		RefreshExpiration: refreshExpStr,
 		ClientID:          clientID,
+		Impersonated:      impersonated,
 	}
 
 	return WriteTokenData(data)

@@ -94,7 +94,10 @@ var sessionLoginCmd = &cobra.Command{
 				return fmt.Errorf("failed to store token in profile: %w", err)
 			}
 		} else {
-			err = client.StoreToken(c.Host, c.SuUser, tok, "", "", exp)
+			// tok is the API user's own token (from client credentials), not
+			// an impersonation token, so it always goes in the default slot.
+			// NewClient already stored any --su token under the su user.
+			err = client.StoreToken(c.Host, "", tok, "", "", exp)
 			if err != nil {
 				return fmt.Errorf("failed to store token: %w", err)
 			}

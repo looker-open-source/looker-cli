@@ -114,6 +114,9 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 	var activeToken string
 	var expiredErr error
 	tokenFromStorage := false
+	// usingImpersonationToken is true only when activeToken is a login_user
+	// token previously issued for suUser, which makes a fresh su unnecessary.
+	usingImpersonationToken := false
 	activeClientID := clientID
 	activeClientSecret := clientSecret
 
@@ -190,7 +193,13 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		entry, err := GetTokenEntry(host, tokenUser)
 		if err == nil && suUser != "" {
 			exp, parseErr := time.Parse(TimeFormat, entry.Expiration)
-			if parseErr != nil || time.Now().After(exp.Add(-5*time.Minute)) {
+			if !entry.Impersonated {
+				// Never trust a non-impersonation token stored under an su
+				// user key (older versions stored the caller's own token
+				// there), since using it would skip the su entirely.
+				_ = DeleteToken(host, suUser)
+				err = fmt.Errorf("stored token for user %s is not an impersonation token", suUser)
+			} else if parseErr != nil || time.Now().After(exp.Add(-5*time.Minute)) {
 				_ = DeleteToken(host, suUser)
 				err = fmt.Errorf("su token expired")
 			}
@@ -245,6 +254,7 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 			}
 			activeToken = entry.Token
 			tokenFromStorage = true
+			usingImpersonationToken = tokenUser != "" && entry.Impersonated
 		}
 	}
 
@@ -301,7 +311,9 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 				_ = cfg.Save()
 			}
 		} else {
-			_ = StoreToken(host, suUser, tok, refTok, cID, exp)
+			// The OAuth token belongs to the caller, never to the su target,
+			// so it always goes in the default slot.
+			_ = StoreToken(host, "", tok, refTok, cID, exp)
 		}
 		if !strings.HasPrefix(activeToken, "Bearer ") && !strings.HasPrefix(activeToken, "token ") {
 			activeToken = "Bearer " + activeToken
@@ -384,36 +396,37 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		ActiveProfile: activeProfile,
 	}
 
-	if suUser != "" && (settings.ClientId != "" || settings.Headers["Authorization"] != "") {
-		tok, err := GetToken(host, suUser)
-		if err != nil || tok == "" || settings.Headers["Authorization"] != "Bearer "+tok {
-			suTokResp, err := sdk.LoginUser(suUser, nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to su to user %s: %w", suUser, err)
-			}
-			if suTokResp.AccessToken == nil || suTokResp.ExpiresIn == nil {
-				return nil, fmt.Errorf("invalid su token response")
-			}
-
-			suTok := "Bearer " + *suTokResp.AccessToken
-			session.Config.Headers["Authorization"] = suTok
-			if hdrTrans != nil {
-				var filtered []Header
-				for _, h := range hdrTrans.headers {
-					if !strings.EqualFold(h.Key, "Authorization") {
-						filtered = append(filtered, h)
-					}
-				}
-				hdrTrans.headers = filtered
-			}
-			if oauth2Trans, ok := session.Client.Transport.(*oauth2.Transport); ok {
-				oauth2Trans.Source = oauth2.StaticTokenSource(&oauth2.Token{
-					AccessToken: *suTokResp.AccessToken,
-				})
-			}
-			exp := time.Now().Add(time.Duration(*suTokResp.ExpiresIn) * time.Second)
-			_ = StoreToken(host, suUser, *suTokResp.AccessToken, "", "", exp)
+	// Always su unless the active token is already a stored login_user token
+	// for this exact user. Comparing against whatever happens to be stored
+	// under the su key isn't enough: that let a caller's own token be
+	// mistaken for an impersonation token.
+	if suUser != "" && !usingImpersonationToken && (settings.ClientId != "" || settings.Headers["Authorization"] != "") {
+		suTokResp, err := sdk.LoginUser(suUser, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to su to user %s: %w", suUser, err)
 		}
+		if suTokResp.AccessToken == nil || suTokResp.ExpiresIn == nil {
+			return nil, fmt.Errorf("invalid su token response")
+		}
+
+		suTok := "Bearer " + *suTokResp.AccessToken
+		session.Config.Headers["Authorization"] = suTok
+		if hdrTrans != nil {
+			var filtered []Header
+			for _, h := range hdrTrans.headers {
+				if !strings.EqualFold(h.Key, "Authorization") {
+					filtered = append(filtered, h)
+				}
+			}
+			hdrTrans.headers = filtered
+		}
+		if oauth2Trans, ok := session.Client.Transport.(*oauth2.Transport); ok {
+			oauth2Trans.Source = oauth2.StaticTokenSource(&oauth2.Token{
+				AccessToken: *suTokResp.AccessToken,
+			})
+		}
+		exp := time.Now().Add(time.Duration(*suTokResp.ExpiresIn) * time.Second)
+		_ = StoreImpersonationToken(host, suUser, *suTokResp.AccessToken, exp)
 	}
 
 	return wrapper, nil
