@@ -25,7 +25,6 @@ jobs:
     name: Test - Looker.${{ matrix.looker }} / Go.${{ matrix.go-version }}
     runs-on: ubuntu-latest
     permissions:
-      checks: write
       contents: read
     strategy:
       matrix:
@@ -72,7 +71,7 @@ jobs:
         run: go build -o looker-cli ./cmd/looker-cli
 
       - name: Run unit tests
-        run: go run gotest.tools/gotestsum@latest --junitfile report.xml -- ./...
+        run: go run gotest.tools/gotestsum@v1.13.0 --junitfile report.xml -- ./...
 
       - name: Upload ts unit test results
         if: ${{ always() }}
@@ -84,21 +83,6 @@ jobs:
       - name: Check that Looker is ready
         run: |
           ${{ github.workspace }}/.github/scripts/wait_for_looker.sh
-
-      - name: Report Failure
-        run: |
-          curl --request POST \
-          --url https://api.github.com/repos/looker-open-source/sdk-codegen/check-runs \
-          --header "authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          --header "content-type: application/json" \
-          --header "Accept: application/vnd.github.v3+json" \
-          --data '{
-            "name": "CI Tests",
-            "head_sha": "${{ github.event.pull_request.head.sha || github.sha }}",
-            "conclusion": "failure"
-          }' \
-          --fail
-        if: failure()
 
       - name: Login persistently
         run: |
