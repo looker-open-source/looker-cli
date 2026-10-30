@@ -425,6 +425,29 @@ func UpsertLookHelper(c *client.ClientWrapper, folderID, myID string, m map[stri
 	return *resultLook.Id, nil
 }
 
+// findLookTitleConflict returns the look in folderID whose title is exactly
+// title, skipping selfID so a look never conflicts with itself. A lookup
+// failure is returned as an error rather than treated as "no conflict".
+func findLookTitleConflict(c *client.ClientWrapper, folderID, title, selfID string) (*v4.LookWithQuery, error) {
+	if title == "" {
+		return nil, nil
+	}
+	folderLooks, err := c.SDK.FolderLooks(folderID, "id,title", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list looks in folder %s: %w", folderID, err)
+	}
+	for i := range folderLooks {
+		fl := folderLooks[i]
+		if fl.Id == nil || *fl.Id == selfID || fl.Title == nil {
+			continue
+		}
+		if *fl.Title == title {
+			return &fl, nil
+		}
+	}
+	return nil, nil
+}
+
 var lookMvCmd = &cobra.Command{
 	Use:   "mv [LOOK_ID] [TARGET_FOLDER_ID]",
 	Short: "Move a look to the given folder",
@@ -437,28 +460,33 @@ var lookMvCmd = &cobra.Command{
 		lookID := args[0]
 		targetFolderID := args[1]
 
-		look, err := c.SDK.Look(lookID, "id,title", nil)
+		look, err := c.SDK.Look(lookID, "id,title,folder_id", nil)
 		if err != nil {
 			return fmt.Errorf("look with id %s does not exist: %w", lookID, err)
 		}
 
-		var matchingTitle *v4.LookWithQuery
-		folderLooks, err := c.SDK.FolderLooks(targetFolderID, "", nil)
-		if err == nil {
-			for _, fl := range folderLooks {
-				if look.Title != nil && fl.Title != nil && *fl.Title == *look.Title {
-					matchingTitle = &fl
-					break
-				}
+		if look.FolderId != nil && *look.FolderId == targetFolderID {
+			if !lookMvPlain {
+				fmt.Printf("Look %s is already in folder %s\n", lookID, targetFolderID)
 			}
+			return nil
+		}
+
+		title := ""
+		if look.Title != nil {
+			title = *look.Title
+		}
+		matchingTitle, err := findLookTitleConflict(c, targetFolderID, title, lookID)
+		if err != nil {
+			return err
 		}
 
 		if matchingTitle != nil {
 			if !lookMvForce {
-				return fmt.Errorf("look %s already exists in folder %s\nuse --force if you want to overwrite it", *look.Title, targetFolderID)
+				return fmt.Errorf("look %s already exists in folder %s\nuse --force if you want to overwrite it", title, targetFolderID)
 			}
 			if !lookMvPlain {
-				fmt.Printf("Deleting existing look %s %s in folder %s\n", *matchingTitle.Id, *matchingTitle.Title, targetFolderID)
+				fmt.Printf("Deleting existing look %s %s in folder %s\n", *matchingTitle.Id, title, targetFolderID)
 			}
 			_, err := c.SDK.DeleteLook(*matchingTitle.Id, nil)
 			if err != nil {

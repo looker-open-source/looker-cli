@@ -35,6 +35,7 @@ var (
 	dashboardCatPlans           bool
 	dashboardImportForce        bool
 	dashboardImportPlain        bool
+	dashboardImportBackupDir    string
 	dashboardMvForce            bool
 	dashboardMvPlain            bool
 	dashboardImportLookmlForce  bool
@@ -81,8 +82,7 @@ func CatDashboardHelper(c *client.ClientWrapper, dID string, trim bool, plans bo
 		if elements, ok := m["dashboard_elements"].([]interface{}); ok {
 			for i, ev := range elements {
 				if em, ok := ev.(map[string]interface{}); ok {
-					if idVal, ok := em["id"].(float64); ok {
-						eID := strconv.FormatInt(int64(idVal), 10)
+					if eID := idToStr(em["id"]); eID != "" {
 						if aList, ok := elemAlerts[eID]; ok {
 							em["alerts"] = aList
 						}
@@ -452,6 +452,9 @@ var dashboardImportCmd = &cobra.Command{
 		if _, ok := m["dashboard_elements"]; !ok {
 			return fmt.Errorf("file contains no dashboard_elements! Is this a look?")
 		}
+		if err := preflightDashboardImport(m); err != nil {
+			return fmt.Errorf("refusing to import %s: %w", file, err)
+		}
 
 		if cfgDebug {
 			fmt.Fprintf(os.Stderr, "Fetching authenticated user (Me)\n")
@@ -546,6 +549,9 @@ var dashboardImportCmd = &cobra.Command{
 		wd.Folder = nil
 
 		var resultDash *v4.Dashboard
+		var problems importErrors
+		backupPath := ""
+		keepBackup := dashboardImportBackupDir != ""
 
 		if existingDash != nil {
 			if cfgDebug {
@@ -555,6 +561,20 @@ var dashboardImportCmd = &cobra.Command{
 			if !dashboardImportForce {
 				return fmt.Errorf("dashboard '%s' already exists in folder %s. Use --force to overwrite", title, folderID)
 			}
+
+			// --force replaces every filter and element, and Looker has no
+			// transactions, so save the current version before touching it.
+			// If the backup fails, nothing has been changed yet.
+			backupPath, err = backupDashboard(c, *existingDash.Id, dashboardImportBackupDir)
+			if err != nil {
+				return fmt.Errorf("not overwriting dashboard %s because backing it up failed: %w", *existingDash.Id, err)
+			}
+			if keepBackup {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Saved a backup of dashboard %s to %s\n", *existingDash.Id, backupPath)
+			} else if cfgDebug {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Saved temporary backup of dashboard %s to %s\n", *existingDash.Id, backupPath)
+			}
+
 			wd.FolderId = nil
 			wd.UserId = nil
 			if slugUsed != nil {
@@ -577,6 +597,9 @@ var dashboardImportCmd = &cobra.Command{
 					updated, err = c.SDK.UpdateDashboard(edID, wd, nil)
 				}
 				if err != nil {
+					if !keepBackup {
+						_ = os.Remove(backupPath)
+					}
 					return fmt.Errorf("failed to update dashboard %s: %w", edID, err)
 				}
 			}
@@ -585,21 +608,27 @@ var dashboardImportCmd = &cobra.Command{
 			if updated.DashboardFilters != nil {
 				for _, f := range *updated.DashboardFilters {
 					if f.Id != nil {
-						_, _ = c.SDK.DeleteDashboardFilter(*f.Id, nil)
+						if _, err := c.SDK.DeleteDashboardFilter(*f.Id, nil); err != nil {
+							problems.addf("failed to delete old dashboard filter %s: %v", *f.Id, err)
+						}
 					}
 				}
 			}
 			if updated.DashboardElements != nil {
 				for _, e := range *updated.DashboardElements {
 					if e.Id != nil {
-						_, _ = c.SDK.DeleteDashboardElement(*e.Id, nil)
+						if _, err := c.SDK.DeleteDashboardElement(*e.Id, nil); err != nil {
+							problems.addf("failed to delete old dashboard element %s: %v", *e.Id, err)
+						}
 					}
 				}
 			}
 			if updated.DashboardLayouts != nil {
 				for _, l := range *updated.DashboardLayouts {
 					if l.Id != nil && (l.Active == nil || !*l.Active) {
-						_, _ = c.SDK.DeleteDashboardLayout(*l.Id, nil)
+						if _, err := c.SDK.DeleteDashboardLayout(*l.Id, nil); err != nil {
+							problems.addf("failed to delete old dashboard layout %s: %v", *l.Id, err)
+						}
 					}
 				}
 			}
@@ -631,39 +660,54 @@ var dashboardImportCmd = &cobra.Command{
 			resultDash = &created
 		}
 
+		if resultDash.Id == nil {
+			return fmt.Errorf("server returned no id for the imported dashboard")
+		}
 		resID := *resultDash.Id
 
 		if filtersVal, ok := m["dashboard_filters"].([]interface{}); ok && len(filtersVal) > 0 {
 			if cfgDebug {
 				fmt.Fprintf(os.Stderr, "Importing %d dashboard filters\n", len(filtersVal))
 			}
-			for _, fv := range filtersVal {
+			for i, fv := range filtersVal {
 				fb, _ := json.Marshal(fv)
 				var wdf v4.WriteCreateDashboardFilter
-				_ = json.Unmarshal(fb, &wdf)
+				if err := json.Unmarshal(fb, &wdf); err != nil {
+					problems.addf("dashboard filter %d is invalid: %v", i, err)
+					continue
+				}
 				wdf.DashboardId = resID
-				_, _ = c.SDK.CreateDashboardFilter(wdf, "", nil)
+				if _, err := c.SDK.CreateDashboardFilter(wdf, "", nil); err != nil {
+					problems.addf("failed to create dashboard filter %q: %v", wdf.Name, err)
+				}
 			}
 		}
 
+		// Elements are created only via the layout components that place
+		// them. Track them across all layouts so elements that were never
+		// created are reported instead of silently dropped.
+		attemptedElems := make(map[int]bool)
 		var activeLayoutID string
 		if layoutsVal, ok := m["dashboard_layouts"].([]interface{}); ok && len(layoutsVal) > 0 {
 			if cfgDebug {
 				fmt.Fprintf(os.Stderr, "Importing %d dashboard layouts\n", len(layoutsVal))
 			}
-			for _, lv := range layoutsVal {
+			for lIdx, lv := range layoutsVal {
 				lb, _ := json.Marshal(lv)
 				var wdl v4.WriteDashboardLayout
 				_ = json.Unmarshal(lb, &wdl)
 				wdl.DashboardId = &resID
 
 				var layoutObj *v4.DashboardLayout
+				var layoutErr error
 				if resultDash.DashboardLayouts != nil && len(*resultDash.DashboardLayouts) > 0 && wdl.Active != nil && *wdl.Active {
 					for _, l := range *resultDash.DashboardLayouts {
 						if l.Active != nil && *l.Active && l.Id != nil {
 							updated, err := c.SDK.UpdateDashboardLayout(*l.Id, wdl, "", nil)
 							if err == nil {
 								layoutObj = &updated
+							} else {
+								layoutErr = err
 							}
 							break
 						}
@@ -673,7 +717,15 @@ var dashboardImportCmd = &cobra.Command{
 					created, err := c.SDK.CreateDashboardLayout(wdl, "", nil)
 					if err == nil {
 						layoutObj = &created
+					} else {
+						layoutErr = err
 					}
+				}
+				if layoutObj == nil || layoutObj.Id == nil {
+					if layoutErr == nil {
+						layoutErr = fmt.Errorf("server returned no layout id")
+					}
+					problems.addf("failed to create dashboard layout %d (its elements were not imported): %v", lIdx, layoutErr)
 				}
 
 				if layoutObj != nil && layoutObj.Id != nil {
@@ -705,6 +757,7 @@ var dashboardImportCmd = &cobra.Command{
 								wdlc.DashboardLayoutId = &activeLayoutID
 
 								var elemMap map[string]interface{}
+								elemIdx := -1
 								if cm, ok := cv.(map[string]interface{}); ok {
 									matchIDStr := idToStr(cm["dashboard_element_id"])
 									compTitle, _ := cm["element_title"].(string)
@@ -718,6 +771,7 @@ var dashboardImportCmd = &cobra.Command{
 												if em, ok := ev.(map[string]interface{}); ok {
 													if idToStr(em["id"]) == matchIDStr {
 														elemMap = em
+														elemIdx = eIdx
 														matchedElems[eIdx] = true
 														break
 													}
@@ -733,6 +787,7 @@ var dashboardImportCmd = &cobra.Command{
 													elemTitle, _ := em["title"].(string)
 													if elemTitle != "" && elemTitle == compTitle {
 														elemMap = em
+														elemIdx = eIdx
 														matchedElems[eIdx] = true
 														break
 													}
@@ -742,6 +797,7 @@ var dashboardImportCmd = &cobra.Command{
 										if elemMap == nil && cIdx < len(elementsVal) && !matchedElems[cIdx] {
 											if em, ok := elementsVal[cIdx].(map[string]interface{}); ok {
 												elemMap = em
+												elemIdx = cIdx
 												matchedElems[cIdx] = true
 											}
 										}
@@ -749,6 +805,8 @@ var dashboardImportCmd = &cobra.Command{
 								}
 
 								if elemMap != nil {
+									attemptedElems[elemIdx] = true
+									elemLabel := elementLabel(elemMap, elemIdx)
 									if cfgDebug {
 										fmt.Fprintf(os.Stderr, "Creating dashboard element '%v'\n", elemMap["title"])
 									}
@@ -776,7 +834,7 @@ var dashboardImportCmd = &cobra.Command{
 											wde.ResultMaker = nil
 											folderLooksFetched = false
 										} else if err != nil {
-											fmt.Fprintf(os.Stderr, "UpsertLookHelper failed: %v\n", err)
+											problems.addf("%s: failed to import its look: %v", elemLabel, err)
 										}
 									}
 
@@ -856,7 +914,7 @@ var dashboardImportCmd = &cobra.Command{
 													wde.ResultMaker.Query = nil
 												}
 											} else if err != nil {
-												fmt.Fprintf(os.Stderr, "CreateQuery failed: %v\n", err)
+												problems.addf("%s: failed to create its query: %v", elemLabel, err)
 											}
 										} else if mVal, ok := elemMap["merge_result"].(map[string]interface{}); ok {
 										if sourceQueries, ok := mVal["source_queries"].([]interface{}); ok {
@@ -873,7 +931,7 @@ var dashboardImportCmd = &cobra.Command{
 															delete(sq, "query")
 															sourceQueries[sqIdx] = sq
 														} else {
-															fmt.Fprintf(os.Stderr, "Failed to recreate source query: %v\n", err)
+															problems.addf("%s: failed to create merge source query %d: %v", elemLabel, sqIdx, err)
 															delete(sq, "query_id")
 															sourceQueries[sqIdx] = sq
 														}
@@ -890,7 +948,7 @@ var dashboardImportCmd = &cobra.Command{
 											wde.MergeResultId = cmq.Id
 											wde.ResultMaker = nil
 										} else if err != nil {
-											fmt.Fprintf(os.Stderr, "CreateMergeQuery failed: %v\n", err)
+											problems.addf("%s: failed to create its merge query: %v", elemLabel, err)
 										}
 									}
 								}
@@ -908,19 +966,28 @@ var dashboardImportCmd = &cobra.Command{
 												_ = json.Unmarshal(ab, &wa)
 												wa.DashboardElementId = &elemIDStr
 												wa.OwnerId = myID
-												_, _ = c.SDK.CreateAlert(wa, nil)
+												if _, err := c.SDK.CreateAlert(wa, nil); err != nil {
+													problems.addf("%s: failed to create alert: %v", elemLabel, err)
+												}
 											}
 										}
 
-										layoutComponents, _ := c.SDK.DashboardLayoutDashboardLayoutComponents(activeLayoutID, "", nil)
+										layoutComponents, err := c.SDK.DashboardLayoutDashboardLayoutComponents(activeLayoutID, "", nil)
+										if err != nil {
+											problems.addf("%s: failed to look up its layout position: %v", elemLabel, err)
+										}
 										for _, lc := range layoutComponents {
 											if lc.DashboardElementId != nil && *lc.DashboardElementId == elemIDStr && lc.Id != nil {
-												_, _ = c.SDK.UpdateDashboardLayoutComponent(*lc.Id, wdlc, "", nil)
+												if _, err := c.SDK.UpdateDashboardLayoutComponent(*lc.Id, wdlc, "", nil); err != nil {
+													problems.addf("%s: failed to set its layout position: %v", elemLabel, err)
+												}
 												break
 											}
 										}
 									} else if err != nil {
-										fmt.Fprintf(os.Stderr, "CreateDashboardElement failed: %v\n", err)
+										problems.addf("%s: failed to create element: %v", elemLabel, err)
+									} else {
+										problems.addf("%s: server returned no id for the created element", elemLabel)
 									}
 								}
 							}
@@ -930,11 +997,23 @@ var dashboardImportCmd = &cobra.Command{
 			}
 		}
 
+		if elementsVal, ok := m["dashboard_elements"].([]interface{}); ok {
+			for i, ev := range elementsVal {
+				if !attemptedElems[i] {
+					em, _ := ev.(map[string]interface{})
+					problems.addf("%s: not imported because no dashboard layout component references it", elementLabel(em, i))
+				}
+			}
+		}
+
 		if plansVal, ok := m["scheduled_plans"].([]interface{}); ok && len(plansVal) > 0 {
 			if cfgDebug {
 				fmt.Fprintf(os.Stderr, "Importing %d scheduled plans\n", len(plansVal))
 			}
-			existingPlans, _ := c.SDK.ScheduledPlansForDashboard(v4.RequestScheduledPlansForDashboard{DashboardId: resID, AllUsers: ptrBool(true)}, nil)
+			existingPlans, err := c.SDK.ScheduledPlansForDashboard(v4.RequestScheduledPlansForDashboard{DashboardId: resID, AllUsers: ptrBool(true)}, nil)
+			if err != nil {
+				problems.addf("failed to list existing scheduled plans, so plans may be duplicated: %v", err)
+			}
 
 			for _, pv := range plansVal {
 				pb, _ := json.Marshal(pv)
@@ -948,24 +1027,35 @@ var dashboardImportCmd = &cobra.Command{
 				if wsp.Name != nil {
 					pName = *wsp.Name
 				}
-				for _, ep := range existingPlans {
+				for i := range existingPlans {
+					ep := existingPlans[i]
 					epName := ""
 					if ep.Name != nil {
 						epName = *ep.Name
 					}
-					if epName == pName && ep.UserId != nil && *ep.UserId == myID {
+					if epName == pName && ep.UserId != nil && *ep.UserId == myID && ep.Id != nil {
 						matchedPlan = &ep
 						break
 					}
 				}
 
 				if matchedPlan != nil {
-					mpID := *matchedPlan.Id
-					_, _ = c.SDK.UpdateScheduledPlan(mpID, wsp, nil)
+					if _, err := c.SDK.UpdateScheduledPlan(*matchedPlan.Id, wsp, nil); err != nil {
+						problems.addf("failed to update scheduled plan %q: %v", pName, err)
+					}
 				} else {
-					_, _ = c.SDK.CreateScheduledPlan(wsp, nil)
+					if _, err := c.SDK.CreateScheduledPlan(wsp, nil); err != nil {
+						problems.addf("failed to create scheduled plan %q: %v", pName, err)
+					}
 				}
 			}
+		}
+
+		if !problems.empty() {
+			return problems.summary(resID, folderID, backupPath)
+		}
+		if backupPath != "" && !keepBackup {
+			_ = os.Remove(backupPath)
 		}
 
 		if dashboardImportPlain {
@@ -989,23 +1079,33 @@ var dashboardMvCmd = &cobra.Command{
 		dashboardID := args[0]
 		targetFolderID := args[1]
 
-		dash, err := c.SDK.Dashboard(dashboardID, "id,title", nil)
+		dash, err := c.SDK.Dashboard(dashboardID, "id,title,folder_id", nil)
 		if err != nil {
 			return fmt.Errorf("dashboard with id %s does not exist: %w", dashboardID, err)
 		}
 
-		matches, _ := c.SDK.SearchDashboards(v4.RequestSearchDashboards{Title: dash.Title, FolderId: &targetFolderID}, nil)
-		var matchingTitle *v4.Dashboard
-		if len(matches) > 0 {
-			matchingTitle = &matches[0]
+		if dash.FolderId != nil && *dash.FolderId == targetFolderID {
+			if !dashboardMvPlain {
+				fmt.Printf("Dashboard %s is already in folder %s\n", dashboardID, targetFolderID)
+			}
+			return nil
+		}
+
+		title := ""
+		if dash.Title != nil {
+			title = *dash.Title
+		}
+		matchingTitle, err := findDashboardTitleConflict(c, targetFolderID, title, dashboardID)
+		if err != nil {
+			return err
 		}
 
 		if matchingTitle != nil {
 			if !dashboardMvForce {
-				return fmt.Errorf("dashboard %s already exists in folder %s\nuse --force if you want to overwrite it", *dash.Title, targetFolderID)
+				return fmt.Errorf("dashboard %s already exists in folder %s\nuse --force if you want to overwrite it", title, targetFolderID)
 			}
 			if !dashboardMvPlain {
-				fmt.Printf("Deleting existing dashboard %s %s in folder %s\n", *matchingTitle.Id, *matchingTitle.Title, targetFolderID)
+				fmt.Printf("Deleting existing dashboard %s %s in folder %s\n", *matchingTitle.Id, title, targetFolderID)
 			}
 			_, err := c.SDK.UpdateDashboard(*matchingTitle.Id, v4.WriteDashboard{Deleted: ptrBool(true)}, nil)
 			if err != nil {
@@ -1042,10 +1142,19 @@ var dashboardImportLookmlCmd = &cobra.Command{
 			return fmt.Errorf("dashboard with id %s does not exist: %w", dashboardID, err)
 		}
 
-		matches, _ := c.SDK.SearchDashboards(v4.RequestSearchDashboards{Title: dash.Title, FolderId: &targetFolderID}, nil)
+		matches, err := c.SDK.SearchDashboards(v4.RequestSearchDashboards{Title: dash.Title, FolderId: &targetFolderID}, nil)
+		if err != nil {
+			return fmt.Errorf("failed to search dashboards in folder %s: %w", targetFolderID, err)
+		}
 		var matchingTitle *v4.Dashboard
-		if len(matches) > 0 {
-			matchingTitle = &matches[0]
+		for i := range matches {
+			// Search is case-insensitive and treats _ and % as wildcards, so
+			// only an exact, live title match counts as a conflict.
+			if matches[i].Id != nil && matches[i].Title != nil && dash.Title != nil &&
+				*matches[i].Title == *dash.Title && (matches[i].Deleted == nil || !*matches[i].Deleted) {
+				matchingTitle = &matches[i]
+				break
+			}
 		}
 
 		if matchingTitle != nil && (matchingTitle.LookmlLinkId == nil || *matchingTitle.LookmlLinkId != dashboardID) {
@@ -1171,6 +1280,7 @@ func init() {
 
 	dashboardImportCmd.Flags().BoolVar(&dashboardImportForce, "force", false, "Overwrite existing dashboard")
 	dashboardImportCmd.Flags().BoolVar(&dashboardImportPlain, "plain", false, "Output only dashboard id")
+	dashboardImportCmd.Flags().StringVar(&dashboardImportBackupDir, "backup-dir", "", "Directory to keep the pre-overwrite backup made by --force (by default a temporary backup in <user cache dir>/looker-cli/backups is kept only if the import fails)")
 
 	dashboardMvCmd.Flags().BoolVar(&dashboardMvForce, "force", false, "Overwrite a dashboard with the same name in the target folder")
 	dashboardMvCmd.Flags().BoolVar(&dashboardMvPlain, "plain", false, "Output only dashboard id")

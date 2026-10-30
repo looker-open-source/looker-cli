@@ -500,13 +500,7 @@ func executeApiCallGeneric(cmd *cobra.Command, method, pathTemplate string, path
 	}
 
 	if cfgDebug {
-		fmt.Printf("--> %s %s\n", method, u.String())
-		for k, v := range req.Header {
-			fmt.Printf("Header %s: %s\n", k, v)
-		}
-		if bodyParam != "" {
-			fmt.Printf("Request Body: %s\n", string(bodyBytes))
-		}
+		logDebugRequest(cmd.ErrOrStderr(), method, u.String(), req.Header, bodyBytes)
 	}
 
 	// 6. Execute request
@@ -523,8 +517,7 @@ func executeApiCallGeneric(cmd *cobra.Command, method, pathTemplate string, path
 	}
 
 	if cfgDebug {
-		fmt.Printf("<-- %s\n", resp.Status)
-		fmt.Printf("Response Body: %s\n", string(outBytes))
+		logDebugResponse(cmd.ErrOrStderr(), resp.Status, outBytes)
 	}
 
 	if resp.StatusCode >= 400 {
