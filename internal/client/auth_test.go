@@ -15,6 +15,7 @@
 package client
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -252,15 +253,6 @@ func TestPerformOAuthLogin_StdinFallback(t *testing.T) {
 	pr, pw := io.Pipe()
 	oauthStdin = pr
 
-	// 3. Write input to stdin mock pipe asynchronously
-	go func() {
-		// Wait a bit to ensure scanner.Scan() is called
-		time.Sleep(100 * time.Millisecond)
-		// Write the pasted redirect URL
-		_, _ = fmt.Fprintln(pw, "http://127.0.0.1:7777/?code=test_auth_code_123")
-		_ = pw.Close()
-	}()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -276,19 +268,50 @@ func TestPerformOAuthLogin_StdinFallback(t *testing.T) {
 	os.Stdout = wOut
 	os.Stderr = wErr
 
+	// 3. Read auth URL from stderr, verify state is present, and send matching redirect URL on stdin.
+	var errBuf bytes.Buffer
+	var capturedState string
+	errDone := make(chan struct{})
+	go func() {
+		defer close(errDone)
+		defer func() { _ = pw.Close() }()
+		sent := false
+		reader := bufio.NewReader(rErr)
+		for {
+			line, readErr := reader.ReadString('\n')
+			if line != "" {
+				errBuf.WriteString(line)
+				if !sent && strings.HasPrefix(line, "Opening browser to URL: ") {
+					rawURL := strings.TrimSpace(strings.TrimPrefix(line, "Opening browser to URL: "))
+					if parsedAuthURL, parseErr := url.Parse(rawURL); parseErr == nil {
+						capturedState = parsedAuthURL.Query().Get("state")
+						_, _ = fmt.Fprintf(pw, "http://127.0.0.1:7777/?code=test_auth_code_123&state=%s\n", capturedState)
+						sent = true
+					}
+				}
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+
 	accessToken, refreshToken, exp, loginErr := PerformOAuthLogin(ctx, host, port, "test_client_id", ssl)
 
 	_ = wOut.Close()
 	_ = wErr.Close()
 	os.Stdout = oldStdout
 	os.Stderr = oldStderr
+	<-errDone
 
-	var outBuf, errBuf bytes.Buffer
+	var outBuf bytes.Buffer
 	_, _ = io.Copy(&outBuf, rOut)
-	_, _ = io.Copy(&errBuf, rErr)
 
 	if loginErr != nil {
 		t.Fatalf("PerformOAuthLogin failed: %v", loginErr)
+	}
+	if capturedState == "" {
+		t.Fatalf("expected non-empty OAuth state parameter in authorization URL")
 	}
 	if outBuf.Len() != 0 {
 		t.Errorf("expected PerformOAuthLogin to write nothing to stdout, got %q", outBuf.String())
