@@ -16,14 +16,15 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"strconv"
+	"path/filepath"
 	"strings"
 
+	"github.com/looker-open-source/looker-cli/internal/util"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/spf13/cobra"
-	"github.com/looker-open-source/looker-cli/internal/util"
 )
 
 var (
@@ -102,8 +103,10 @@ var planCatCmd = &cobra.Command{
 			if plan.Name != nil {
 				name = *plan.Name
 			}
-			fn := fmt.Sprintf("%s/Plan_%s_%s.json", planCatDir, pID, strings.ReplaceAll(name, "/", "_"))
-			_ = os.WriteFile(fn, bytes, 0644)
+			fn := filepath.Join(planCatDir, fmt.Sprintf("Plan_%s_%s.json", pID, strings.ReplaceAll(name, "/", "_")))
+			if err := writeOutputFile(fn, bytes); err != nil {
+				return err
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(string(bytes))
@@ -272,11 +275,15 @@ var planImportCmd = &cobra.Command{
 
 		var existingPlans []v4.ScheduledPlan
 		if objType == "look" {
-			objIDInt, _ := strconv.ParseInt(objID, 10, 64)
-			existingPlans, _ = c.SDK.ScheduledPlansForLook(v4.RequestScheduledPlansForLook{LookId: strconv.FormatInt(objIDInt, 10), AllUsers: ptrBool(true)}, nil)
+			existingPlans, err = c.SDK.ScheduledPlansForLook(v4.RequestScheduledPlansForLook{LookId: objID, AllUsers: ptrBool(true)}, nil)
+			if err != nil {
+				return fmt.Errorf("failed to list scheduled plans for look %s: %w", objID, err)
+			}
 		} else {
-			objIDInt, _ := strconv.ParseInt(objID, 10, 64)
-			existingPlans, _ = c.SDK.ScheduledPlansForDashboard(v4.RequestScheduledPlansForDashboard{DashboardId: strconv.FormatInt(objIDInt, 10), AllUsers: ptrBool(true)}, nil)
+			existingPlans, err = c.SDK.ScheduledPlansForDashboard(v4.RequestScheduledPlansForDashboard{DashboardId: objID, AllUsers: ptrBool(true)}, nil)
+			if err != nil {
+				return fmt.Errorf("failed to list scheduled plans for dashboard %s: %w", objID, err)
+			}
 		}
 
 		var matchedPlan *v4.ScheduledPlan
@@ -284,12 +291,13 @@ var planImportCmd = &cobra.Command{
 		if wsp.Name != nil {
 			pName = *wsp.Name
 		}
-		for _, ep := range existingPlans {
+		for i := range existingPlans {
+			ep := existingPlans[i]
 			epName := ""
 			if ep.Name != nil {
 				epName = *ep.Name
 			}
-			if epName == pName && ep.UserId != nil && *ep.UserId == myID {
+			if epName == pName && ep.UserId != nil && *ep.UserId == myID && ep.Id != nil {
 				matchedPlan = &ep
 				break
 			}
@@ -311,10 +319,14 @@ var planImportCmd = &cobra.Command{
 			resultPlan = &created
 		}
 
+		idStr := ""
+		if resultPlan.Id != nil {
+			idStr = *resultPlan.Id
+		}
 		if planImportPlain {
-			fmt.Println(*resultPlan.Id)
+			fmt.Println(idStr)
 		} else {
-			fmt.Printf("Imported plan %s\n", *resultPlan.Id)
+			fmt.Printf("Imported plan %s\n", idStr)
 		}
 		return nil
 	},
@@ -361,7 +373,9 @@ var planFailuresCmd = &cobra.Command{
 		}
 
 		var rows []map[string]interface{}
-		_ = json.Unmarshal([]byte(res), &rows)
+		if err := json.Unmarshal([]byte(res), &rows); err != nil {
+			return fmt.Errorf("failed to parse scheduled plan failures response: %w", err)
+		}
 
 		var tableRows [][]string
 		priorID := ""
@@ -418,6 +432,7 @@ var planRandomizeCmd = &cobra.Command{
 			}
 		}
 
+		var errs []error
 		for _, p := range plans {
 			if p.Crontab != nil && *p.Crontab != "" && p.Id != nil {
 				newCron := randomizeCron(*p.Crontab, window)
@@ -425,11 +440,15 @@ var planRandomizeCmd = &cobra.Command{
 				var wsp v4.WriteScheduledPlan
 				_ = json.Unmarshal(pb, &wsp)
 				wsp.Crontab = &newCron
-				_, _ = c.SDK.UpdateScheduledPlan(*p.Id, wsp, nil)
+				if _, err := c.SDK.UpdateScheduledPlan(*p.Id, wsp, nil); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to randomize plan %s: %v\n", *p.Id, err)
+					errs = append(errs, fmt.Errorf("failed to update scheduled plan %s: %w", *p.Id, err))
+					continue
+				}
 				fmt.Printf("Randomized plan %s crontab to %s\n", *p.Id, newCron)
 			}
 		}
-		return nil
+		return errors.Join(errs...)
 	},
 }
 

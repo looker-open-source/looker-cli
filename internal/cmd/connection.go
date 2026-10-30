@@ -18,29 +18,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/looker-open-source/looker-cli/internal/util"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/spf13/cobra"
-	"github.com/looker-open-source/looker-cli/internal/util"
 )
 
 var (
-	connectionLsFields      string
-	connectionLsPlain       bool
-	connectionLsCSV         bool
+	connectionLsFields       string
+	connectionLsPlain        bool
+	connectionLsCSV          bool
 	connectionDialectsFields string
 	connectionDialectsPlain  bool
 	connectionDialectsCSV    bool
-	connectionCatFields   string
-	connectionCatDir      string
-	connectionCatTrim     bool
-	connectionImportForce bool
-	connectionImportPlain bool
-	connectionTestTests   string
-	connectionTestPlain   bool
-	connectionTestCSV     bool
+	connectionCatFields      string
+	connectionCatDir         string
+	connectionCatTrim        bool
+	connectionImportForce    bool
+	connectionImportPlain    bool
+	connectionTestTests      string
+	connectionTestPlain      bool
+	connectionTestCSV        bool
 )
 
 var ConnectionCmd = &cobra.Command{
@@ -137,8 +137,10 @@ var connectionCatCmd = &cobra.Command{
 
 		outBytes, _ := json.MarshalIndent(m, "", "  ")
 		if connectionCatDir != "" {
-			fn := fmt.Sprintf("%s/Connection_%s.json", connectionCatDir, cName)
-			_ = os.WriteFile(fn, outBytes, 0644)
+			fn := filepath.Join(connectionCatDir, fmt.Sprintf("Connection_%s.json", cName))
+			if err := writeOutputFile(fn, outBytes); err != nil {
+				return err
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(string(outBytes))
@@ -252,16 +254,29 @@ var connectionTestCmd = &cobra.Command{
 
 		headers := []string{"Name", "Status", "Message"}
 		table := util.NewTable(headers)
+		failed := 0
 		for _, r := range results {
 			n := ""
-			if r.Name != nil { n = *r.Name }
+			if r.Name != nil {
+				n = *r.Name
+			}
 			s := ""
-			if r.Status != nil { s = *r.Status }
+			if r.Status != nil {
+				s = *r.Status
+			}
 			msg := ""
-			if r.Message != nil { msg = *r.Message }
+			if r.Message != nil {
+				msg = *r.Message
+			}
+			if strings.EqualFold(s, "error") {
+				failed++
+			}
 			table.Append([]string{n, s, msg})
 		}
 		table.Render(connectionTestPlain, connectionTestCSV)
+		if failed > 0 {
+			return fmt.Errorf("%d connection test(s) failed for %s", failed, cName)
+		}
 		return nil
 	},
 }

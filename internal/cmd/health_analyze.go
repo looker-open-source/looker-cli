@@ -17,14 +17,16 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/util"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -245,6 +247,7 @@ func runAnalyzeExplores(ctx context.Context, c *client.ClientWrapper, model, exp
 
 	headers := []string{"Model", "Explore", "Is Hidden", "Has Description", "# Joins", "# Unused Joins", "# Unused Fields", "# Fields", "Query Count"}
 	table := util.NewTable(headers)
+	var errs []error
 
 	for _, m := range lookmlModels {
 		if m.Name == nil {
@@ -271,8 +274,8 @@ func runAnalyzeExplores(ctx context.Context, c *client.ClientWrapper, model, exp
 			}
 			exploreDetail, err := c.SDK.LookmlModelExplore(req, nil)
 			if err != nil {
-				// Log error and continue
-				fmt.Printf("Error fetching detail for explore %s.%s: %v\n", *m.Name, *e.Name, err)
+				fmt.Fprintf(os.Stderr, "Error fetching detail for explore %s.%s: %v\n", *m.Name, *e.Name, err)
+				errs = append(errs, fmt.Errorf("error fetching detail for explore %s.%s: %w", *m.Name, *e.Name, err))
 				continue
 			}
 
@@ -296,7 +299,8 @@ func runAnalyzeExplores(ctx context.Context, c *client.ClientWrapper, model, exp
 
 			usedFields, err := getUsedExploreFields(ctx, c, *m.Name, *e.Name, timeframe)
 			if err != nil {
-				fmt.Printf("Error fetching used fields for explore %s.%s: %v\n", *m.Name, *e.Name, err)
+				fmt.Fprintf(os.Stderr, "Error fetching used fields for explore %s.%s: %v\n", *m.Name, *e.Name, err)
+				errs = append(errs, fmt.Errorf("error fetching used fields for explore %s.%s: %w", *m.Name, *e.Name, err))
 				continue
 			}
 
@@ -370,13 +374,21 @@ func runAnalyzeExplores(ctx context.Context, c *client.ClientWrapper, model, exp
 				Body:         *queryCountQueryBody,
 			}
 			rawQueryCount, err := c.SDK.RunInlineQuery(reqQC, nil)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error fetching query count for explore %s.%s: %v\n", *m.Name, *e.Name, err)
+				errs = append(errs, fmt.Errorf("error fetching query count for explore %s.%s: %w", *m.Name, *e.Name, err))
+				continue
+			}
+			var data []map[string]interface{}
+			if err := json.Unmarshal([]byte(rawQueryCount), &data); err != nil {
+				fmt.Fprintf(os.Stderr, "Error parsing query count for explore %s.%s: %v\n", *m.Name, *e.Name, err)
+				errs = append(errs, fmt.Errorf("error parsing query count for explore %s.%s: %w", *m.Name, *e.Name, err))
+				continue
+			}
 			queryCount := 0
-			if err == nil {
-				var data []map[string]interface{}
-				if err := json.Unmarshal([]byte(rawQueryCount), &data); err == nil && len(data) > 0 {
-					if count, ok := data[0]["history.query_run_count"].(float64); ok {
-						queryCount = int(count)
-					}
+			if len(data) > 0 {
+				if count, ok := data[0]["history.query_run_count"].(float64); ok {
+					queryCount = int(count)
 				}
 			}
 
@@ -405,7 +417,7 @@ func runAnalyzeExplores(ctx context.Context, c *client.ClientWrapper, model, exp
 	}
 
 	table.Render(plain, csv)
-	return nil
+	return errors.Join(errs...)
 }
 
 func getUsedExploreFields(ctx context.Context, c *client.ClientWrapper, model, explore string, timeframe int) (map[string]int, error) {

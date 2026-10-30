@@ -15,6 +15,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,9 +264,37 @@ func TestPerformOAuthLogin_StdinFallback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	accessToken, refreshToken, exp, err := PerformOAuthLogin(ctx, host, port, "test_client_id", ssl)
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	rOut, wOut, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("PerformOAuthLogin failed: %v", err)
+		t.Fatalf("failed to create stdout pipe: %v", err)
+	}
+	rErr, wErr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create stderr pipe: %v", err)
+	}
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	accessToken, refreshToken, exp, loginErr := PerformOAuthLogin(ctx, host, port, "test_client_id", ssl)
+
+	_ = wOut.Close()
+	_ = wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+
+	var outBuf, errBuf bytes.Buffer
+	_, _ = io.Copy(&outBuf, rOut)
+	_, _ = io.Copy(&errBuf, rErr)
+
+	if loginErr != nil {
+		t.Fatalf("PerformOAuthLogin failed: %v", loginErr)
+	}
+	if outBuf.Len() != 0 {
+		t.Errorf("expected PerformOAuthLogin to write nothing to stdout, got %q", outBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "Opening browser to URL:") {
+		t.Errorf("expected PerformOAuthLogin prompt on stderr, got %q", errBuf.String())
 	}
 
 	if accessToken != "mock_access_token_abc" {
@@ -690,4 +720,3 @@ func TestTokenStorage_CleanHost(t *testing.T) {
 		t.Errorf("expected token to be deleted")
 	}
 }
-

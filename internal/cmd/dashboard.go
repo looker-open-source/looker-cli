@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -392,8 +393,10 @@ var dashboardCatCmd = &cobra.Command{
 			if v, ok := m["title"].(string); ok {
 				title = v
 			}
-			fn := fmt.Sprintf("%s/Dashboard_%s_%s.json", dashboardCatDir, dID, strings.ReplaceAll(title, "/", "_"))
-			_ = os.WriteFile(fn, []byte(outStr), 0644)
+			fn := filepath.Join(dashboardCatDir, fmt.Sprintf("Dashboard_%s_%s.json", dID, strings.ReplaceAll(title, "/", "_")))
+			if err := writeOutputFile(fn, []byte(outStr)); err != nil {
+				return err
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(outStr)
@@ -533,13 +536,13 @@ var dashboardImportCmd = &cobra.Command{
 		slugConflict := slugUsed != nil && (existingDash == nil || existingDash.Id == nil || slugUsed.Id == nil || *existingDash.Id != *slugUsed.Id)
 		if slugConflict && !dashboardImportPlain {
 			if slugUsed.Deleted != nil && *slugUsed.Deleted {
-				fmt.Printf("Warning: Slug '%s' is already in use on a deleted dashboard. Generating a new slug for this import.\n", slug)
+				fmt.Fprintf(os.Stderr, "Warning: Slug '%s' is already in use on a deleted dashboard. Generating a new slug for this import.\n", slug)
 			} else {
 				conflictingFolder := ""
 				if slugUsed.FolderId != nil {
 					conflictingFolder = *slugUsed.FolderId
 				}
-				fmt.Printf("Warning: Slug '%s' is already in use in folder %s. Generating a new slug for this import.\n", slug, conflictingFolder)
+				fmt.Fprintf(os.Stderr, "Warning: Slug '%s' is already in use in folder %s. Generating a new slug for this import.\n", slug, conflictingFolder)
 			}
 		}
 
@@ -591,7 +594,7 @@ var dashboardImportCmd = &cobra.Command{
 			if err != nil {
 				if strings.Contains(err.Error(), "status=409") && wd.Slug != nil {
 					if !dashboardImportPlain {
-						fmt.Printf("Warning: Conflict occurred on update. Retrying without slug.\n")
+						fmt.Fprintf(os.Stderr, "Warning: Conflict occurred on update. Retrying without slug.\n")
 					}
 					wd.Slug = nil
 					updated, err = c.SDK.UpdateDashboard(edID, wd, nil)
@@ -648,7 +651,7 @@ var dashboardImportCmd = &cobra.Command{
 			if err != nil {
 				if strings.Contains(err.Error(), "status=409") && wd.Slug != nil {
 					if !dashboardImportPlain {
-						fmt.Printf("Warning: Conflict occurred on create. Retrying without slug.\n")
+						fmt.Fprintf(os.Stderr, "Warning: Conflict occurred on create. Retrying without slug.\n")
 					}
 					wd.Slug = nil
 					created, err = c.SDK.CreateDashboard(wd, nil)
@@ -917,41 +920,41 @@ var dashboardImportCmd = &cobra.Command{
 												problems.addf("%s: failed to create its query: %v", elemLabel, err)
 											}
 										} else if mVal, ok := elemMap["merge_result"].(map[string]interface{}); ok {
-										if sourceQueries, ok := mVal["source_queries"].([]interface{}); ok {
-											for sqIdx, sqv := range sourceQueries {
-												if sq, ok := sqv.(map[string]interface{}); ok {
-													if qVal, ok := sq["query"].(map[string]interface{}); ok {
-														qb, _ := json.Marshal(qVal)
-														var wq v4.WriteQuery
-														_ = json.Unmarshal(qb, &wq)
-														wq.ClientId = nil
-														cq, err := c.SDK.CreateQuery(wq, "", nil)
-														if err == nil && cq.Id != nil {
-															sq["query_id"] = cq.Id
-															delete(sq, "query")
-															sourceQueries[sqIdx] = sq
-														} else {
-															problems.addf("%s: failed to create merge source query %d: %v", elemLabel, sqIdx, err)
-															delete(sq, "query_id")
-															sourceQueries[sqIdx] = sq
+											if sourceQueries, ok := mVal["source_queries"].([]interface{}); ok {
+												for sqIdx, sqv := range sourceQueries {
+													if sq, ok := sqv.(map[string]interface{}); ok {
+														if qVal, ok := sq["query"].(map[string]interface{}); ok {
+															qb, _ := json.Marshal(qVal)
+															var wq v4.WriteQuery
+															_ = json.Unmarshal(qb, &wq)
+															wq.ClientId = nil
+															cq, err := c.SDK.CreateQuery(wq, "", nil)
+															if err == nil && cq.Id != nil {
+																sq["query_id"] = cq.Id
+																delete(sq, "query")
+																sourceQueries[sqIdx] = sq
+															} else {
+																problems.addf("%s: failed to create merge source query %d: %v", elemLabel, sqIdx, err)
+																delete(sq, "query_id")
+																sourceQueries[sqIdx] = sq
+															}
 														}
 													}
 												}
+												mVal["source_queries"] = sourceQueries
 											}
-											mVal["source_queries"] = sourceQueries
-										}
-										mb, _ := json.Marshal(mVal)
-										var wmq v4.WriteMergeQuery
-										_ = json.Unmarshal(mb, &wmq)
-										cmq, err := c.SDK.CreateMergeQuery(wmq, "", nil)
-										if err == nil && cmq.Id != nil {
-											wde.MergeResultId = cmq.Id
-											wde.ResultMaker = nil
-										} else if err != nil {
-											problems.addf("%s: failed to create its merge query: %v", elemLabel, err)
+											mb, _ := json.Marshal(mVal)
+											var wmq v4.WriteMergeQuery
+											_ = json.Unmarshal(mb, &wmq)
+											cmq, err := c.SDK.CreateMergeQuery(wmq, "", nil)
+											if err == nil && cmq.Id != nil {
+												wde.MergeResultId = cmq.Id
+												wde.ResultMaker = nil
+											} else if err != nil {
+												problems.addf("%s: failed to create its merge query: %v", elemLabel, err)
+											}
 										}
 									}
-								}
 
 									reqElem := v4.RequestCreateDashboardElement{Body: wde}
 									createdElem, err := c.SDK.CreateDashboardElement(reqElem, nil)

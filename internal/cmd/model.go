@@ -17,11 +17,11 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
+	"path/filepath"
 
-	"github.com/spf13/cobra"
-	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/looker-open-source/looker-cli/internal/util"
+	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -111,8 +111,10 @@ var modelCatCmd = &cobra.Command{
 
 		outBytes, _ := json.MarshalIndent(m, "", "  ")
 		if modelCatDir != "" {
-			fn := fmt.Sprintf("%s/Model_%s.json", modelCatDir, mName)
-			_ = os.WriteFile(fn, outBytes, 0644)
+			fn := filepath.Join(modelCatDir, fmt.Sprintf("Model_%s.json", mName))
+			if err := writeOutputFile(fn, outBytes); err != nil {
+				return err
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(string(outBytes))
@@ -253,8 +255,10 @@ var modelSetCatCmd = &cobra.Command{
 			if v, ok := m["name"].(string); ok {
 				name = v
 			}
-			fn := fmt.Sprintf("%s/Model_Set_%s.json", modelSetCatDir, name)
-			_ = os.WriteFile(fn, outBytes, 0644)
+			fn := filepath.Join(modelSetCatDir, fmt.Sprintf("Model_Set_%s.json", name))
+			if err := writeOutputFile(fn, outBytes); err != nil {
+				return err
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(string(outBytes))

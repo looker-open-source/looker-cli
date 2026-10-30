@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,28 +28,28 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/looker-open-source/looker-cli/internal/client"
-	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/looker-open-source/looker-cli/internal/util"
+	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
-	folderLsFields     string
-	folderLsPlain      bool
-	folderLsCSV        bool
-	folderTopFields    string
-	folderTopPlain     bool
-	folderTopCSV       bool
-	folderTreePlain    bool
-	folderCatFields    string
-	folderCatDir       string
-	folderExportDir    string
-	folderExportTar    string
-	folderExportTgz    string
-	folderExportZip    string
-	folderExportTrim   bool
-	folderRmForce      bool
+	folderLsFields   string
+	folderLsPlain    bool
+	folderLsCSV      bool
+	folderTopFields  string
+	folderTopPlain   bool
+	folderTopCSV     bool
+	folderTreePlain  bool
+	folderCatFields  string
+	folderCatDir     string
+	folderExportDir  string
+	folderExportTar  string
+	folderExportTgz  string
+	folderExportZip  string
+	folderExportTrim bool
+	folderRmForce    bool
 )
 
 var FolderCmd = &cobra.Command{
@@ -270,15 +271,21 @@ func mapToRow(m map[string]interface{}, headers []string) []string {
 		if val, ok := m[h]; ok && val != nil {
 			switch v := val.(type) {
 			case *string:
-				if v != nil { row[i] = *v }
+				if v != nil {
+					row[i] = *v
+				}
 			case string:
 				row[i] = v
 			case *int64:
-				if v != nil { row[i] = strconv.FormatInt(*v, 10) }
+				if v != nil {
+					row[i] = strconv.FormatInt(*v, 10)
+				}
 			case int64:
 				row[i] = strconv.FormatInt(v, 10)
 			case *float64:
-				if v != nil { row[i] = strconv.FormatFloat(*v, 'f', -1, 64) }
+				if v != nil {
+					row[i] = strconv.FormatFloat(*v, 'f', -1, 64)
+				}
 			case float64:
 				row[i] = strconv.FormatFloat(v, 'f', -1, 64)
 			default:
@@ -332,14 +339,18 @@ func printTree(c *client.ClientWrapper, folderID, indent string) {
 	if folder.Looks != nil {
 		for _, l := range *folder.Looks {
 			t := ""
-			if l.Title != nil { t = *l.Title }
+			if l.Title != nil {
+				t = *l.Title
+			}
 			items = append(items, "(l) "+t)
 		}
 	}
 	if folder.Dashboards != nil {
 		for _, d := range *folder.Dashboards {
 			t := ""
-			if d.Title != nil { t = *d.Title }
+			if d.Title != nil {
+				t = *d.Title
+			}
 			items = append(items, "(d) "+t)
 		}
 	}
@@ -384,8 +395,10 @@ var folderCatCmd = &cobra.Command{
 
 		bytes, _ := json.MarshalIndent(folder, "", "  ")
 		if folderCatDir != "" {
-			fn := fmt.Sprintf("%s/Folder_%s_%s.json", folderCatDir, fID, sanitizeFilename(folder.Name))
-			_ = os.WriteFile(fn, bytes, 0644)
+			fn := filepath.Join(folderCatDir, fmt.Sprintf("Folder_%s_%s.json", fID, sanitizeFilename(folder.Name)))
+			if err := writeOutputFile(fn, bytes); err != nil {
+				return err
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(string(bytes))
@@ -410,7 +423,10 @@ var folderRmCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("folder %s not found: %w", fID, err)
 			}
-			children, _ := c.SDK.FolderChildren(v4.RequestFolderChildren{FolderId: fID, Fields: ptr("id")}, nil)
+			children, err := c.SDK.FolderChildren(v4.RequestFolderChildren{FolderId: fID, Fields: ptr("id")}, nil)
+			if err != nil {
+				return fmt.Errorf("failed to check subfolders of folder %s: %w", fID, err)
+			}
 			hasLooks := folder.Looks != nil && len(*folder.Looks) > 0
 			hasDash := folder.Dashboards != nil && len(*folder.Dashboards) > 0
 			hasChild := len(children) > 0
@@ -446,7 +462,9 @@ var folderCreateCmd = &cobra.Command{
 			return fmt.Errorf("failed to create folder %s: %w", name, err)
 		}
 		id := ""
-		if folder.Id != nil { id = *folder.Id }
+		if folder.Id != nil {
+			id = *folder.Id
+		}
 		fmt.Printf("Folder created with ID %s\n", id)
 		return nil
 	},
@@ -485,27 +503,40 @@ var folderExportCmd = &cobra.Command{
 			}
 
 			if zw, ok := archiver.(*zip.Writer); ok {
-				_ = zw.Close()
 				fn := folderExportZip
-				_ = os.WriteFile(fn, buf.Bytes(), 0644)
+				if err := zw.Close(); err != nil {
+					return fmt.Errorf("failed to finalize zip %s: %w", fn, err)
+				}
+				if err := writeOutputFile(fn, buf.Bytes()); err != nil {
+					return err
+				}
 				fmt.Printf("Wrote zip %s\n", fn)
 			} else if tw, ok := archiver.(*tar.Writer); ok {
-				_ = tw.Close()
-				if gzw != nil {
-					_ = gzw.Close()
-				}
 				fn := folderExportTar
-				if folderExportTgz != "" { fn = folderExportTgz }
-				_ = os.WriteFile(fn, buf.Bytes(), 0644)
+				if folderExportTgz != "" {
+					fn = folderExportTgz
+				}
+				if err := tw.Close(); err != nil {
+					return fmt.Errorf("failed to finalize tar %s: %w", fn, err)
+				}
+				if gzw != nil {
+					if err := gzw.Close(); err != nil {
+						return fmt.Errorf("failed to finalize gzip %s: %w", fn, err)
+					}
+				}
+				if err := writeOutputFile(fn, buf.Bytes()); err != nil {
+					return err
+				}
 				fmt.Printf("Wrote archive %s\n", fn)
 			}
 			return nil
 		}
 
-		if folderExportDir == "" {
-			folderExportDir = "."
+		outDir := folderExportDir
+		if outDir == "" {
+			outDir = "."
 		}
-		return exportFolderDir(c, fID, folderExportDir)
+		return exportFolderDir(c, fID, outDir)
 	},
 }
 
@@ -517,7 +548,9 @@ func exportFolderDir(c *client.ClientWrapper, fID, baseDir string) error {
 	name := folder.Name
 	cleanName := sanitizeFilename(name)
 	dirName := filepath.Join(baseDir, fmt.Sprintf("Folder_%s_%s", fID, cleanName))
-	_ = os.MkdirAll(dirName, 0755)
+	if err := os.MkdirAll(dirName, 0o755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dirName, err)
+	}
 
 	b, _ := json.Marshal(folder)
 	var m map[string]interface{}
@@ -525,19 +558,27 @@ func exportFolderDir(c *client.ClientWrapper, fID, baseDir string) error {
 	delete(m, "looks")
 	delete(m, "dashboards")
 	fb, _ := json.MarshalIndent(m, "", "  ")
-	_ = os.WriteFile(filepath.Join(dirName, fmt.Sprintf("Folder_%s_%s.json", fID, cleanName)), fb, 0644)
+	if err := writeOutputFile(filepath.Join(dirName, fmt.Sprintf("Folder_%s_%s.json", fID, cleanName)), fb); err != nil {
+		return err
+	}
 
+	var errs []error
 	if folder.Looks != nil {
 		for _, l := range *folder.Looks {
 			if l.Id != nil {
 				lookMap, err := CatLookHelper(c, *l.Id, folderExportTrim, false, "")
-				if err == nil {
-					lb, _ := json.MarshalIndent(lookMap, "", "  ")
-					lt := ""
-					if v, ok := lookMap["title"].(string); ok { lt = v }
-					_ = os.WriteFile(filepath.Join(dirName, fmt.Sprintf("Look_%s_%s.json", *l.Id, sanitizeFilename(lt))), lb, 0644)
-				} else {
+				if err != nil {
 					fmt.Fprintf(os.Stderr, "failed to export look %s: %v\n", *l.Id, err)
+					errs = append(errs, fmt.Errorf("failed to export look %s: %w", *l.Id, err))
+					continue
+				}
+				lb, _ := json.MarshalIndent(lookMap, "", "  ")
+				lt := ""
+				if v, ok := lookMap["title"].(string); ok {
+					lt = v
+				}
+				if err := writeOutputFile(filepath.Join(dirName, fmt.Sprintf("Look_%s_%s.json", *l.Id, sanitizeFilename(lt))), lb); err != nil {
+					return err
 				}
 			}
 		}
@@ -546,36 +587,50 @@ func exportFolderDir(c *client.ClientWrapper, fID, baseDir string) error {
 		for _, d := range *folder.Dashboards {
 			if d.Id != nil {
 				dashMap, err := CatDashboardHelper(c, *d.Id, folderExportTrim, false, "")
-				if err == nil {
-					db, _ := json.MarshalIndent(dashMap, "", "  ")
-					dt := ""
-					if v, ok := dashMap["title"].(string); ok { dt = v }
-					_ = os.WriteFile(filepath.Join(dirName, fmt.Sprintf("Dashboard_%s_%s.json", *d.Id, sanitizeFilename(dt))), db, 0644)
-				} else {
+				if err != nil {
 					fmt.Fprintf(os.Stderr, "failed to export dashboard %s: %v\n", *d.Id, err)
+					errs = append(errs, fmt.Errorf("failed to export dashboard %s: %w", *d.Id, err))
+					continue
+				}
+				db, _ := json.MarshalIndent(dashMap, "", "  ")
+				dt := ""
+				if v, ok := dashMap["title"].(string); ok {
+					dt = v
+				}
+				if err := writeOutputFile(filepath.Join(dirName, fmt.Sprintf("Dashboard_%s_%s.json", *d.Id, sanitizeFilename(dt))), db); err != nil {
+					return err
 				}
 			}
 		}
 	}
 
-	children, _ := c.SDK.FolderChildren(v4.RequestFolderChildren{FolderId: fID, Fields: ptr("id")}, nil)
+	children, err := c.SDK.FolderChildren(v4.RequestFolderChildren{FolderId: fID, Fields: ptr("id")}, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to list children of folder %s: %v\n", fID, err)
+		errs = append(errs, fmt.Errorf("failed to list children of folder %s: %w", fID, err))
+		return errors.Join(errs...)
+	}
 	for _, ch := range children {
 		if ch.Id != nil {
-			_ = exportFolderDir(c, *ch.Id, dirName)
+			if err := exportFolderDir(c, *ch.Id, dirName); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func exportFolderArchive(c *client.ClientWrapper, fID string, archiver interface{}, pathPrefix string) error {
 	folder, err := c.SDK.Folder(fID, "", nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get folder %s: %w", fID, err)
 	}
 	name := folder.Name
 	cleanName := sanitizeFilename(name)
 	dirName := fmt.Sprintf("Folder_%s_%s/", fID, cleanName)
-	if pathPrefix != "" { dirName = pathPrefix + dirName }
+	if pathPrefix != "" {
+		dirName = pathPrefix + dirName
+	}
 
 	b, _ := json.Marshal(folder)
 	var m map[string]interface{}
@@ -585,20 +640,28 @@ func exportFolderArchive(c *client.ClientWrapper, fID string, archiver interface
 	fb, _ := json.MarshalIndent(m, "", "  ")
 
 	fn := dirName + fmt.Sprintf("Folder_%s_%s.json", fID, cleanName)
-	writeArchiveFile(archiver, fn, fb)
+	if err := writeArchiveFile(archiver, fn, fb); err != nil {
+		return err
+	}
 
+	var errs []error
 	if folder.Looks != nil {
 		for _, l := range *folder.Looks {
 			if l.Id != nil {
 				lookMap, err := CatLookHelper(c, *l.Id, folderExportTrim, false, "")
-				if err == nil {
-					lb, _ := json.MarshalIndent(lookMap, "", "  ")
-					lt := ""
-					if v, ok := lookMap["title"].(string); ok { lt = v }
-					lfn := dirName + fmt.Sprintf("Look_%s_%s.json", *l.Id, sanitizeFilename(lt))
-					writeArchiveFile(archiver, lfn, lb)
-				} else {
+				if err != nil {
 					fmt.Fprintf(os.Stderr, "failed to export look %s to archive: %v\n", *l.Id, err)
+					errs = append(errs, fmt.Errorf("failed to export look %s: %w", *l.Id, err))
+					continue
+				}
+				lb, _ := json.MarshalIndent(lookMap, "", "  ")
+				lt := ""
+				if v, ok := lookMap["title"].(string); ok {
+					lt = v
+				}
+				lfn := dirName + fmt.Sprintf("Look_%s_%s.json", *l.Id, sanitizeFilename(lt))
+				if err := writeArchiveFile(archiver, lfn, lb); err != nil {
+					return err
 				}
 			}
 		}
@@ -607,44 +670,68 @@ func exportFolderArchive(c *client.ClientWrapper, fID string, archiver interface
 		for _, d := range *folder.Dashboards {
 			if d.Id != nil {
 				dashMap, err := CatDashboardHelper(c, *d.Id, folderExportTrim, false, "")
-				if err == nil {
-					db, _ := json.MarshalIndent(dashMap, "", "  ")
-					dt := ""
-					if v, ok := dashMap["title"].(string); ok { dt = v }
-					dfn := dirName + fmt.Sprintf("Dashboard_%s_%s.json", *d.Id, sanitizeFilename(dt))
-					writeArchiveFile(archiver, dfn, db)
-				} else {
+				if err != nil {
 					fmt.Fprintf(os.Stderr, "failed to export dashboard %s to archive: %v\n", *d.Id, err)
+					errs = append(errs, fmt.Errorf("failed to export dashboard %s: %w", *d.Id, err))
+					continue
+				}
+				db, _ := json.MarshalIndent(dashMap, "", "  ")
+				dt := ""
+				if v, ok := dashMap["title"].(string); ok {
+					dt = v
+				}
+				dfn := dirName + fmt.Sprintf("Dashboard_%s_%s.json", *d.Id, sanitizeFilename(dt))
+				if err := writeArchiveFile(archiver, dfn, db); err != nil {
+					return err
 				}
 			}
 		}
 	}
 
-	children, _ := c.SDK.FolderChildren(v4.RequestFolderChildren{FolderId: fID, Fields: ptr("id")}, nil)
+	children, err := c.SDK.FolderChildren(v4.RequestFolderChildren{FolderId: fID, Fields: ptr("id")}, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to list children of folder %s: %v\n", fID, err)
+		errs = append(errs, fmt.Errorf("failed to list children of folder %s: %w", fID, err))
+		return errors.Join(errs...)
+	}
 	for _, ch := range children {
 		if ch.Id != nil {
-			_ = exportFolderArchive(c, *ch.Id, archiver, dirName)
+			if err := exportFolderArchive(c, *ch.Id, archiver, dirName); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
-func writeArchiveFile(archiver interface{}, name string, data []byte) {
-	if zw, ok := archiver.(*zip.Writer); ok {
-		f, _ := zw.Create(name)
-		_, _ = f.Write(data)
-	} else if tw, ok := archiver.(*tar.Writer); ok {
+func writeArchiveFile(archiver interface{}, name string, data []byte) error {
+	switch a := archiver.(type) {
+	case *zip.Writer:
+		f, err := a.Create(name)
+		if err != nil {
+			return fmt.Errorf("failed to create zip entry %s: %w", name, err)
+		}
+		if _, err := f.Write(data); err != nil {
+			return fmt.Errorf("failed to write zip entry %s: %w", name, err)
+		}
+		return nil
+	case *tar.Writer:
 		hdr := &tar.Header{
 			Name: name,
-			Mode: 0644,
+			Mode: 0o644,
 			Size: int64(len(data)),
 		}
-		_ = tw.WriteHeader(hdr)
-		_, _ = tw.Write(data)
+		if err := a.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("failed to write tar header %s: %w", name, err)
+		}
+		if _, err := a.Write(data); err != nil {
+			return fmt.Errorf("failed to write tar entry %s: %w", name, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported archive writer %T", archiver)
 	}
 }
-
-
 
 func init() {
 	RootCmd.AddCommand(FolderCmd)
