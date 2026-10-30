@@ -18,15 +18,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/spf13/cobra"
-	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/looker-open-source/looker-cli/internal/util"
+	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
-	groupLsFields          string
-	groupLsPlain           bool
-	groupLsCSV             bool
+	groupLsFields           string
+	groupLsPlain            bool
+	groupLsCSV              bool
 	groupMemberGroupsFields string
 	groupMemberGroupsPlain  bool
 	groupMemberGroupsCSV    bool

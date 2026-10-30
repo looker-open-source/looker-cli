@@ -24,21 +24,21 @@ import (
 	"time"
 
 	"github.com/looker-open-source/looker-cli/internal/util"
-	"github.com/spf13/cobra"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
-	userCatFields    string
-	userCatDir       string
-	userCatTrim      bool
-	userMeFields     string
-	userMePlain      bool
-	userMeCSV        bool
-	userLsFields     string
-	userLsLastLogin  bool
-	userLsPlain      bool
-	userLsCSV        bool
+	userCatFields   string
+	userCatDir      string
+	userCatTrim     bool
+	userMeFields    string
+	userMePlain     bool
+	userMeCSV       bool
+	userLsFields    string
+	userLsLastLogin bool
+	userLsPlain     bool
+	userLsCSV       bool
 )
 
 var UserCmd = &cobra.Command{
@@ -127,15 +127,15 @@ var userCatCmd = &cobra.Command{
 
 		if userCatTrim {
 			keep := map[string]bool{
-				"id":                   true,
-				"credentials_email":    true,
-				"first_name":           true,
-				"home_folder_id":       true,
-				"is_disabled":          true,
-				"last_name":            true,
-				"locale":               true,
-				"models_dir_validated": true,
-				"ui_state":             true,
+				"id":                    true,
+				"credentials_email":     true,
+				"first_name":            true,
+				"home_folder_id":        true,
+				"is_disabled":           true,
+				"last_name":             true,
+				"locale":                true,
+				"models_dir_validated":  true,
+				"ui_state":              true,
 				"can_manage_api3_creds": true,
 			}
 			for k := range dataMap {

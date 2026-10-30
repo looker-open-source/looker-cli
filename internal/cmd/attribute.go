@@ -23,8 +23,8 @@ import (
 
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/util"
-	"github.com/spf13/cobra"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -56,10 +56,18 @@ func resolveGroupID(c *client.ClientWrapper, arg string) (string, error) {
 		return arg, nil
 	}
 	groups, err := c.SDK.SearchGroups(v4.RequestSearchGroups{Name: &arg, Fields: ptr("id")}, nil)
-	if err != nil { return "", err }
-	if len(groups) == 0 { return "", fmt.Errorf("no group found with name %s", arg) }
-	if len(groups) > 1 { return "", fmt.Errorf("multiple groups found with name %s", arg) }
-	if groups[0].Id == nil { return "", fmt.Errorf("invalid group id") }
+	if err != nil {
+		return "", err
+	}
+	if len(groups) == 0 {
+		return "", fmt.Errorf("no group found with name %s", arg)
+	}
+	if len(groups) > 1 {
+		return "", fmt.Errorf("multiple groups found with name %s", arg)
+	}
+	if groups[0].Id == nil {
+		return "", fmt.Errorf("invalid group id")
+	}
 	return *groups[0].Id, nil
 }
 
@@ -68,7 +76,9 @@ func resolveAttrID(c *client.ClientWrapper, arg string) (string, error) {
 		return arg, nil
 	}
 	attrs, err := c.SDK.AllUserAttributes(v4.RequestAllUserAttributes{Fields: ptr("id,name")}, nil)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	for _, a := range attrs {
 		if a.Name == arg && a.Id != nil {
 			return *a.Id, nil
@@ -82,10 +92,14 @@ var attributeLsCmd = &cobra.Command{
 	Short: "List all defined user attributes",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		attrs, err := c.SDK.AllUserAttributes(v4.RequestAllUserAttributes{Fields: &attributeLsFields}, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		headers := util.ParseFieldsForHeaders(attributeLsFields)
 
@@ -104,12 +118,18 @@ var attributeCatCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		aID, err := resolveAttrID(c, args[0])
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		attr, err := c.SDK.UserAttribute(aID, attributeCatFields, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		bytes, _ := json.MarshalIndent(attr, "", "  ")
 		if attributeCatDir != "" {
@@ -131,12 +151,18 @@ var attributeRmCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		aID, err := resolveAttrID(c, args[0])
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		_, err = c.SDK.DeleteUserAttribute(aID, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		if !attributeRmPlain {
 			fmt.Printf("User attribute %s deleted.\n", aID)
 		}
@@ -160,16 +186,24 @@ var attributeSetGroupValueCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		gID, err := resolveGroupID(c, args[0])
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		aID, err := resolveAttrID(c, args[1])
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		val := args[2]
 
 		body := v4.UserAttributeGroupValue{Value: &val}
 		res, err := c.SDK.UpdateUserAttributeGroupValue(gID, aID, body, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		resID := aID
 		if res.Id != nil {
 			resID = *res.Id
@@ -199,14 +233,22 @@ var attributeGetGroupValueCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		gID, err := resolveGroupID(c, args[0])
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		aID, err := resolveAttrID(c, args[1])
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		values, err := c.SDK.AllUserAttributeGroupValues(aID, "", nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		for _, v := range values {
 			if v.GroupId != nil && *v.GroupId == gID && v.Value != nil {
@@ -224,10 +266,14 @@ var attributeCreateCmd = &cobra.Command{
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		name := args[0]
 		label := name
-		if len(args) > 1 { label = args[1] }
+		if len(args) > 1 {
+			label = args[1]
+		}
 
 		var existingAttr *v4.UserAttribute
 		attrs, err := c.SDK.AllUserAttributes(v4.RequestAllUserAttributes{Fields: ptr("id,name,label,is_system")}, nil)
@@ -249,8 +295,12 @@ var attributeCreateCmd = &cobra.Command{
 			UserCanView:   &attributeCreateCanView,
 			UserCanEdit:   &attributeCreateCanEdit,
 		}
-		if attributeCreateDefault != "" { wua.DefaultValue = &attributeCreateDefault }
-		if attributeCreateDomain != "" && attributeCreateIsHidden { wua.HiddenValueDomainWhitelist = &attributeCreateDomain }
+		if attributeCreateDefault != "" {
+			wua.DefaultValue = &attributeCreateDefault
+		}
+		if attributeCreateDomain != "" && attributeCreateIsHidden {
+			wua.HiddenValueDomainWhitelist = &attributeCreateDomain
+		}
 
 		var resultAttr *v4.UserAttribute
 
@@ -266,11 +316,15 @@ var attributeCreateCmd = &cobra.Command{
 			}
 			aID := *existingAttr.Id
 			updated, err := c.SDK.UpdateUserAttribute(aID, wua, "", nil)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			resultAttr = &updated
 		} else {
 			created, err := c.SDK.CreateUserAttribute(wua, "", nil)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			resultAttr = &created
 		}
 
@@ -290,14 +344,20 @@ var attributeImportCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		file := args[0]
 
 		b, err := util.ReadFileOrStdin(file)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		var m map[string]interface{}
-		if err := json.Unmarshal(b, &m); err != nil { return err }
+		if err := json.Unmarshal(b, &m); err != nil {
+			return err
+		}
 
 		name, _ := m["name"].(string)
 		if name == "" {
@@ -334,11 +394,15 @@ var attributeImportCmd = &cobra.Command{
 			}
 			aID := *existingAttr.Id
 			updated, err := c.SDK.UpdateUserAttribute(aID, wua, "", nil)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			resultAttr = &updated
 		} else {
 			created, err := c.SDK.CreateUserAttribute(wua, "", nil)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			resultAttr = &created
 		}
 
