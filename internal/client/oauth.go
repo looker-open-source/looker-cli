@@ -20,10 +20,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -48,12 +50,41 @@ type tokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// OAuthRequestOptions configures HTTP client behavior for OAuth endpoints.
+type OAuthRequestOptions struct {
+	SSL          bool
+	VerifySSL    bool
+	Timeout      time.Duration
+	HTTPProxy    string
+	HTTPClient   *http.Client
+	Headers      []Header
+	callbackAddr string // optional listener override for tests; defaults to 127.0.0.1:7777
+}
+
+func resolveOAuthHTTPClient(opts OAuthRequestOptions) (*http.Client, error) {
+	if opts.HTTPClient != nil {
+		return opts.HTTPClient, nil
+	}
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = time.Duration(DefaultTimeoutSeconds) * time.Second
+	}
+	return buildHTTPClient(opts.VerifySSL, timeout, opts.HTTPProxy)
+}
+
+func randomBase64URL(numBytes int) (string, error) {
+	b := make([]byte, numBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
 func generatePKCE() (verifier, challenge string, err error) {
-	verifierBytes := make([]byte, 32)
-	if _, err := rand.Read(verifierBytes); err != nil {
+	verifier, err = randomBase64URL(32)
+	if err != nil {
 		return "", "", err
 	}
-	verifier = base64.RawURLEncoding.EncodeToString(verifierBytes)
 
 	hasher := sha256.New()
 	hasher.Write([]byte(verifier))
@@ -62,24 +93,132 @@ func generatePKCE() (verifier, challenge string, err error) {
 	return verifier, challenge, nil
 }
 
+func generateOAuthState() (string, error) {
+	return randomBase64URL(32)
+}
+
+func newOAuthCallbackHandler(expectedState string, codeChan chan<- string, errChan chan<- error) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		q := r.URL.Query()
+		code := q.Get("code")
+		oauthErr := q.Get("error")
+		errDesc := q.Get("error_description")
+		if code == "" && oauthErr == "" && errDesc == "" {
+			http.Error(w, "Missing OAuth callback parameters", http.StatusBadRequest)
+			return
+		}
+
+		gotState := q.Get("state")
+		if expectedState == "" || subtle.ConstantTimeCompare([]byte(gotState), []byte(expectedState)) != 1 {
+			http.Error(w, "Authorization failed: invalid or missing state parameter", http.StatusBadRequest)
+			return
+		}
+
+		if code == "" {
+			errMsg := errDesc
+			if errMsg == "" {
+				errMsg = oauthErr
+			}
+			if errMsg == "" {
+				errMsg = "authorization failed"
+			}
+			http.Error(w, "Authorization failed: "+errMsg, http.StatusBadRequest)
+			select {
+			case errChan <- fmt.Errorf("oauth error: %s", errMsg):
+			default:
+			}
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, "<html><body><h1>Authorization Successful!</h1><p>You can close this window and return to the CLI.</p></body></html>")
+		select {
+		case codeChan <- code:
+		default:
+		}
+	})
+	return mux
+}
+
 // PerformOAuthLogin initiates PKCE flow, opens browser, waits for callback, and exchanges code for token.
 func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl bool, headers ...Header) (string, string, time.Time, error) {
+	return PerformOAuthLoginWithOptions(ctx, host, port, clientID, OAuthRequestOptions{
+		SSL:       ssl,
+		VerifySSL: true,
+		Timeout:   time.Duration(DefaultTimeoutSeconds) * time.Second,
+		Headers:   headers,
+	})
+}
+
+// PerformOAuthLoginWithOptions initiates PKCE flow using the provided HTTP client options.
+func PerformOAuthLoginWithOptions(ctx context.Context, host, port, clientID string, opts OAuthRequestOptions) (string, string, time.Time, error) {
 	host = util.CleanHost(host)
+
+	httpClient, err := resolveOAuthHTTPClient(opts)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
 
 	verifier, challenge, err := generatePKCE()
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to generate PKCE: %w", err)
 	}
 
+	state, err := generateOAuthState()
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("failed to generate OAuth state: %w", err)
+	}
+
 	scheme := "https"
-	if !ssl {
+	if !opts.SSL {
 		scheme = "http"
 	}
 
-	// UI host for /auth
-	uiHost := host
-	uiURL := fmt.Sprintf("%s://%s/auth", scheme, uiHost)
+	stderrWriter := os.Stderr
+	codeChan := make(chan string, 1)
+	errChan := make(chan error, 1)
 
+	listenAddr := "127.0.0.1:" + redirectPort
+	if opts.callbackAddr != "" {
+		listenAddr = opts.callbackAddr
+	}
+	cbRedirectURI := redirectURI
+
+	ln, listenErr := net.Listen("tcp", listenAddr)
+	if listenErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: local callback server failed to start: %v. Automatic redirect will not work, but you can still use the manual fallback.\n", listenErr)
+	} else {
+		if opts.callbackAddr != "" {
+			cbRedirectURI = "http://" + ln.Addr().String()
+		}
+		srv := &http.Server{
+			Handler:           newOAuthCallbackHandler(state, codeChan, errChan),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			if serveErr := srv.Serve(ln); serveErr != nil && serveErr != http.ErrServerClosed {
+				_, _ = fmt.Fprintf(stderrWriter, "Warning: local callback server stopped unexpectedly: %v\n", serveErr)
+			}
+		}()
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+		}()
+	}
+
+	// UI host for /auth
+	uiURL := fmt.Sprintf("%s://%s/auth", scheme, host)
 	authURL, err := url.Parse(uiURL)
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("invalid auth URL: %w", err)
@@ -87,42 +226,13 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 
 	q := authURL.Query()
 	q.Set("client_id", clientID)
-	q.Set("redirect_uri", redirectURI)
+	q.Set("redirect_uri", cbRedirectURI)
 	q.Set("response_type", "code")
 	q.Set("scope", "cors_api") // Looker API scope
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
+	q.Set("state", state)
 	authURL.RawQuery = q.Encode()
-
-	codeChan := make(chan string, 1)
-	errChan := make(chan error, 1)
-
-	mux := http.NewServeMux()
-	srv := &http.Server{
-		Addr:    "127.0.0.1:" + redirectPort,
-		Handler: mux,
-	}
-
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		code := r.URL.Query().Get("code")
-		if code == "" {
-			errDesc := r.URL.Query().Get("error_description")
-			http.Error(w, "Authorization failed: "+errDesc, http.StatusBadRequest)
-			errChan <- fmt.Errorf("oauth error: %s", errDesc)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/html")
-		_, _ = fmt.Fprintf(w, "<html><body><h1>Authorization Successful!</h1><p>You can close this window and return to the CLI.</p></body></html>")
-		codeChan <- code
-	})
-
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(os.Stderr, "Warning: local callback server failed to start: %v. Automatic redirect will not work, but you can still use the manual fallback.\n", err)
-		}
-	}()
-	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	if isSSHSession() {
 		fmt.Fprintln(os.Stderr, "=======================================================================")
@@ -144,46 +254,56 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 
 	stdinCodeChan := make(chan string, 1)
 	stdinErrChan := make(chan error, 1)
+	stdinReader := oauthStdin
+
+	loginCtx, cancelLogin := context.WithCancel(ctx)
+	defer cancelLogin()
 
 	go func() {
 		// Only print fallback instructions if browser failed to open, or after 1.5s if no response yet
 		if !browserOpened {
-			fmt.Fprintln(os.Stderr, "\n--- OAuth Stdin Fallback ---")
-			fmt.Fprintln(os.Stderr, "Please open the URL above in a browser.")
-			fmt.Fprintf(os.Stderr, "After authorizing, you will be redirected to %s/?code=...\n", redirectURI)
-			fmt.Fprintln(os.Stderr, "Copy the full redirected URL and paste it below.")
-			fmt.Fprint(os.Stderr, "Paste redirected URL here: ")
+			_, _ = fmt.Fprintln(stderrWriter, "\n--- OAuth Stdin Fallback ---")
+			_, _ = fmt.Fprintln(stderrWriter, "Please open the URL above in a browser.")
+			_, _ = fmt.Fprintf(stderrWriter, "After authorizing, you will be redirected to %s/?code=...\n", cbRedirectURI)
+			_, _ = fmt.Fprintln(stderrWriter, "Copy the full redirected URL and paste it below.")
+			_, _ = fmt.Fprint(stderrWriter, "Paste redirected URL here: ")
 		} else {
 			// Wait a bit before printing instructions to not clutter automatic redirect flow
 			select {
-			case <-ctx.Done():
+			case <-loginCtx.Done():
 				return
 			case <-time.After(1500 * time.Millisecond):
 				// If we got here, maybe browser is slow or didn't actually open, or redirect is taking time
-				fmt.Fprintln(os.Stderr, "\n--- OAuth Stdin Fallback ---")
-				fmt.Fprintln(os.Stderr, "If the browser did not open or redirect automatically, please:")
-				fmt.Fprintln(os.Stderr, "1. Copy the URL above into your browser.")
-				fmt.Fprintf(os.Stderr, "2. After authorizing, copy the redirected URL (starting with %s/?code=...)\n", redirectURI)
-				fmt.Fprintln(os.Stderr, "3. Paste the URL here.")
-				fmt.Fprint(os.Stderr, "Paste redirected URL here: ")
+				_, _ = fmt.Fprintln(stderrWriter, "\n--- OAuth Stdin Fallback ---")
+				_, _ = fmt.Fprintln(stderrWriter, "If the browser did not open or redirect automatically, please:")
+				_, _ = fmt.Fprintln(stderrWriter, "1. Copy the URL above into your browser.")
+				_, _ = fmt.Fprintf(stderrWriter, "2. After authorizing, copy the redirected URL (starting with %s/?code=...)\n", cbRedirectURI)
+				_, _ = fmt.Fprintln(stderrWriter, "3. Paste the URL here.")
+				_, _ = fmt.Fprint(stderrWriter, "Paste redirected URL here: ")
 			}
 		}
 
-		scanner := bufio.NewScanner(oauthStdin)
+		scanner := bufio.NewScanner(stdinReader)
 		for {
 			if !scanner.Scan() {
 				if err := scanner.Err(); err != nil {
-					stdinErrChan <- fmt.Errorf("failed to read from stdin: %w", err)
+					select {
+					case stdinErrChan <- fmt.Errorf("failed to read from stdin: %w", err):
+					default:
+					}
 				}
 				return
 			}
 			input := scanner.Text()
-			code, err := parsePastedAuthInput(input)
+			code, err := parsePastedAuthInputWithState(input, state)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v. Please try again: ", err)
+				_, _ = fmt.Fprintf(stderrWriter, "Error: %v. Please try again: ", err)
 				continue
 			}
-			stdinCodeChan <- code
+			select {
+			case stdinCodeChan <- code:
+			default:
+			}
 			return
 		}
 	}()
@@ -201,6 +321,7 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 	case code = <-stdinCodeChan:
 		// Succeeded via copy-paste fallback
 	}
+
 	// Exchange code for token
 	apiHost := host
 	if port != "" {
@@ -211,7 +332,7 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 	body := map[string]string{
 		"grant_type":    "authorization_code",
 		"client_id":     clientID,
-		"redirect_uri":  redirectURI,
+		"redirect_uri":  cbRedirectURI,
 		"code":          code,
 		"code_verifier": verifier,
 	}
@@ -223,9 +344,9 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", UserAgent)
-	applyHeaders(req.Header, headers)
+	applyHeaders(req.Header, opts.Headers)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("token request failed: %w", err)
 	}
@@ -247,10 +368,25 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 
 // RefreshOAuthToken performs explicit OAuth2 refresh token grant to get a new short-lived access token.
 func RefreshOAuthToken(ctx context.Context, host, port, clientID, refreshToken string, ssl bool, headers ...Header) (string, string, time.Time, error) {
+	return RefreshOAuthTokenWithOptions(ctx, host, port, clientID, refreshToken, OAuthRequestOptions{
+		SSL:       ssl,
+		VerifySSL: true,
+		Timeout:   time.Duration(DefaultTimeoutSeconds) * time.Second,
+		Headers:   headers,
+	})
+}
+
+// RefreshOAuthTokenWithOptions performs explicit OAuth2 refresh token grant using the provided HTTP client options.
+func RefreshOAuthTokenWithOptions(ctx context.Context, host, port, clientID, refreshToken string, opts OAuthRequestOptions) (string, string, time.Time, error) {
 	host = util.CleanHost(host)
 
+	httpClient, err := resolveOAuthHTTPClient(opts)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+
 	scheme := "https"
-	if !ssl {
+	if !opts.SSL {
 		scheme = "http"
 	}
 
@@ -273,9 +409,9 @@ func RefreshOAuthToken(ctx context.Context, host, port, clientID, refreshToken s
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", UserAgent)
-	applyHeaders(req.Header, headers)
+	applyHeaders(req.Header, opts.Headers)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("refresh token request failed: %w", err)
 	}
@@ -307,6 +443,10 @@ func isSSHSession() bool {
 }
 
 func parsePastedAuthInput(input string) (string, error) {
+	return parsePastedAuthInputWithState(input, "")
+}
+
+func parsePastedAuthInputWithState(input, expectedState string) (string, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return "", fmt.Errorf("empty input")
@@ -315,11 +455,18 @@ func parsePastedAuthInput(input string) (string, error) {
 	// Try to parse as URL
 	u, err := url.Parse(input)
 	if err == nil && u.Scheme != "" && u.Host != "" {
-		code := u.Query().Get("code")
-		if code != "" {
-			return code, nil
+		q := u.Query()
+		code := q.Get("code")
+		if code == "" {
+			return "", fmt.Errorf("pasted URL did not contain a 'code' parameter")
 		}
-		return "", fmt.Errorf("pasted URL did not contain a 'code' parameter")
+		if expectedState != "" {
+			gotState := q.Get("state")
+			if subtle.ConstantTimeCompare([]byte(gotState), []byte(expectedState)) != 1 {
+				return "", fmt.Errorf("invalid or missing 'state' parameter in pasted redirect URL")
+			}
+		}
+		return code, nil
 	}
 
 	// Fallback: if it doesn't look like a URL but could be the code

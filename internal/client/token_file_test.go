@@ -246,7 +246,7 @@ func TestNewClient_SurfacesCorruptConfigAndOAuthPersistFailure(t *testing.T) {
 		oauthStdin = pr
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			_, _ = fmt.Fprintln(pw, "http://127.0.0.1:7777/?code=test_auth_code")
+			_, _ = fmt.Fprintln(pw, "test_auth_code")
 			_ = pw.Close()
 		}()
 

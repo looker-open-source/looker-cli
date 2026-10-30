@@ -17,8 +17,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/config"
@@ -41,7 +44,6 @@ var (
 	cfgDebug        bool
 	cfgTimeout      int
 	cfgHTTPProxy    string
-	cfgForce        bool
 	cfgProfile      string
 	cfgHeaders      []string
 )
@@ -81,7 +83,6 @@ func init() {
 	RootCmd.PersistentFlags().BoolVar(&cfgDebug, "debug", false, "Run in debug mode")
 	RootCmd.PersistentFlags().IntVar(&cfgTimeout, "timeout", 60, "Seconds to wait for a response from the server")
 	RootCmd.PersistentFlags().StringVar(&cfgHTTPProxy, "http-proxy", "", "HTTP Proxy for connecting to Looker host")
-	RootCmd.PersistentFlags().BoolVar(&cfgForce, "force", false, "Overwrite objects on server")
 	RootCmd.PersistentFlags().StringVar(&cfgProfile, "profile", "", "Use a specific profile from config.yaml")
 	RootCmd.PersistentFlags().StringArrayVarP(&cfgHeaders, "header", "H", nil, "Custom header to pass in the API call (can be specified multiple times)")
 
@@ -118,6 +119,24 @@ func (h *headerDoer) Do(result interface{}, method, ver, path string, reqPars ma
 func initClient(ctx context.Context, oauth bool) (*client.ClientWrapper, error) {
 	parsedHeaders, err := client.ParseHeaders(cfgHeaders)
 	if err != nil {
+		return nil, err
+	}
+
+	timeout := cfgTimeout
+	if flag := RootCmd.PersistentFlags().Lookup("timeout"); flag != nil && !flag.Changed {
+		if envTimeout := strings.TrimSpace(os.Getenv("LOOKERSDK_TIMEOUT")); envTimeout != "" {
+			parsedTimeout, err := strconv.Atoi(envTimeout)
+			if err != nil || parsedTimeout <= 0 || parsedTimeout > math.MaxInt32 {
+				return nil, fmt.Errorf("invalid LOOKERSDK_TIMEOUT %q: must be a positive integer", envTimeout)
+			}
+			timeout = parsedTimeout
+		}
+	}
+	if timeout <= 0 || timeout > math.MaxInt32 {
+		return nil, fmt.Errorf("--timeout must be a positive integer, got %d", timeout)
+	}
+
+	if err := client.ValidateHTTPProxy(cfgHTTPProxy); err != nil {
 		return nil, err
 	}
 
@@ -221,19 +240,20 @@ func initClient(ctx context.Context, oauth bool) (*client.ClientWrapper, error) 
 		}
 	}
 
-	return client.NewClient(
-		ctx,
-		host,
-		port,
-		clientID,
-		clientSecret,
-		token,
-		cfgSuUser,
-		ssl,
-		verifySSL,
-		oauth,
-		cfgTokenFile,
-		activeProfile,
-		cfgHeaders...,
-	)
+	return client.NewClientWithOptions(ctx, client.ClientOptions{
+		Host:          host,
+		Port:          port,
+		ClientID:      clientID,
+		ClientSecret:  clientSecret,
+		Token:         token,
+		SuUser:        cfgSuUser,
+		SSL:           ssl,
+		VerifySSL:     verifySSL,
+		OAuth:         oauth,
+		TokenFile:     cfgTokenFile,
+		ActiveProfile: activeProfile,
+		Timeout:       timeout,
+		HTTPProxy:     cfgHTTPProxy,
+		Headers:       cfgHeaders,
+	})
 }

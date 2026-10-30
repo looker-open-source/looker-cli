@@ -210,6 +210,7 @@ Every command accepts the following optional global parameters to customize conn
 | `--verify-ssl` | Verify server SSL certificate | `true` |
 | `--su` | Act as another user ID (Sudo) | `""` |
 | `--timeout` | Seconds to wait for a response | `60` |
+| `--http-proxy` | HTTP proxy URL for connecting to the Looker host | `""` |
 | `--token` | Access token to use for authentication | `""` |
 | `--token-file` | Use access token stored in `~/.looker_auth` | `false` |
 | `--client-id` | API Client ID | `""` |
