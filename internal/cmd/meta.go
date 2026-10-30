@@ -36,20 +36,20 @@ var MetaCmd = &cobra.Command{
 }
 
 type FlagInfo struct {
-	Name        string `json:"name"`
-	Shorthand   string `json:"shorthand,omitempty"`
-	Usage       string `json:"usage"`
-	DefaultVal  string `json:"default_value,omitempty"`
+	Name       string `json:"name"`
+	Shorthand  string `json:"shorthand,omitempty"`
+	Usage      string `json:"usage"`
+	DefaultVal string `json:"default_value,omitempty"`
 }
 
 type CommandNode struct {
-	Name        string         `json:"name"`
-	Use         string         `json:"use"`
-	Short       string         `json:"short"`
-	Long        string         `json:"long"`
-	Aliases     []string       `json:"aliases,omitempty"`
-	Flags       []FlagInfo     `json:"flags,omitempty"`
-	Subcommands []CommandNode  `json:"subcommands,omitempty"`
+	Name        string        `json:"name"`
+	Use         string        `json:"use"`
+	Short       string        `json:"short"`
+	Long        string        `json:"long"`
+	Aliases     []string      `json:"aliases,omitempty"`
+	Flags       []FlagInfo    `json:"flags,omitempty"`
+	Subcommands []CommandNode `json:"subcommands,omitempty"`
 }
 
 var metaTreeCmd = &cobra.Command{
@@ -150,7 +150,7 @@ func printCmdTree(cmd *cobra.Command, indent string) {
 	if len(cmd.Aliases) > 0 {
 		name = fmt.Sprintf("%s (%s)", name, strings.Join(cmd.Aliases, ", "))
 	}
-	
+
 	if indent == "" {
 		fmt.Println(name)
 	}

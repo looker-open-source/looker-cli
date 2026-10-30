@@ -528,10 +528,10 @@ func TestInitClient_CleanHost(t *testing.T) {
 	}()
 
 	testCases := []struct {
-		name      string
-		cliHost   string
-		wantHost  string
-		wantBase  string
+		name     string
+		cliHost  string
+		wantHost string
+		wantBase string
 	}{
 		{
 			name:     "https prefix and trailing slash",
@@ -648,4 +648,3 @@ func TestInitClient_CleanHost(t *testing.T) {
 		}
 	})
 }
-
