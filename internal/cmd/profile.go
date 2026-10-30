@@ -87,14 +87,6 @@ var profileAddCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-
-		if _, exists := cfg.Profiles[name]; exists {
-			return fmt.Errorf("profile %q already exists", name)
-		}
 
 		var ssl *bool
 		if flag := cmd.Flags().Lookup("ssl"); flag != nil && flag.Changed {
@@ -125,13 +117,16 @@ var profileAddCmd = &cobra.Command{
 			VerifySSL:         verifySSL,
 		}
 
-		cfg.Profiles[name] = prof
-
-		if cfg.Default == "" {
-			cfg.Default = name
-		}
-
-		if err := cfg.Save(); err != nil {
+		if err := config.Update(func(cfg *config.Config) error {
+			if _, exists := cfg.Profiles[name]; exists {
+				return fmt.Errorf("profile %q already exists", name)
+			}
+			cfg.Profiles[name] = prof
+			if cfg.Default == "" {
+				cfg.Default = name
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 
@@ -146,17 +141,13 @@ var profileUseCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-
-		if _, exists := cfg.Profiles[name]; !exists {
-			return fmt.Errorf("profile %q does not exist", name)
-		}
-
-		cfg.Default = name
-		if err := cfg.Save(); err != nil {
+		if err := config.Update(func(cfg *config.Config) error {
+			if _, exists := cfg.Profiles[name]; !exists {
+				return fmt.Errorf("profile %q does not exist", name)
+			}
+			cfg.Default = name
+			return nil
+		}); err != nil {
 			return err
 		}
 
@@ -171,27 +162,24 @@ var profileRmCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-
-		if _, exists := cfg.Profiles[name]; !exists {
-			return fmt.Errorf("profile %q does not exist", name)
-		}
-
-		delete(cfg.Profiles, name)
-
-		if cfg.Default == name {
-			cfg.Default = ""
-			// Set another profile as default if available
-			for k := range cfg.Profiles {
-				cfg.Default = k
-				break
+		if err := config.Update(func(cfg *config.Config) error {
+			if _, exists := cfg.Profiles[name]; !exists {
+				return fmt.Errorf("profile %q does not exist", name)
 			}
-		}
 
-		if err := cfg.Save(); err != nil {
+			delete(cfg.Profiles, name)
+
+			if cfg.Default == name {
+				cfg.Default = ""
+				// Pick the lexicographically smallest remaining profile for deterministic fallback.
+				for k := range cfg.Profiles {
+					if cfg.Default == "" || k < cfg.Default {
+						cfg.Default = k
+					}
+				}
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 

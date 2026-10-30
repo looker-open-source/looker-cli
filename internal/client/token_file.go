@@ -16,9 +16,12 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/looker-open-source/looker-cli/internal/util"
@@ -54,35 +57,107 @@ func getTokenFilePath() (string, error) {
 	return filepath.Join(home, tokenFileName), nil
 }
 
+func checkSecureTokenFilePerm(goos string, mode os.FileMode, path string) error {
+	// Windows synthesizes POSIX mode bits from the read-only attribute (0666 or
+	// 0444), so POSIX group/other permission checks do not apply there.
+	if goos == "windows" {
+		return nil
+	}
+	if mode.Perm()&0o077 != 0 {
+		return fmt.Errorf("token file %s has insecure permissions %04o, expected 0600 or 0400", path, mode.Perm())
+	}
+	return nil
+}
+
+func readTokenDataUnlocked(path string) (TokenData, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return make(TokenData), nil
+		}
+		return nil, fmt.Errorf("failed to open token file: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat token file: %w", err)
+	}
+
+	if err := checkSecureTokenFilePerm(runtime.GOOS, stat.Mode(), path); err != nil {
+		return nil, err
+	}
+
+	raw, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read token file: %w", err)
+	}
+
+	var data TokenData
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, fmt.Errorf("failed to decode token file: %w", err)
+	}
+	if data == nil {
+		data = make(TokenData)
+	}
+
+	return data, nil
+}
+
+func writeTokenDataUnlocked(path string, data TokenData) error {
+	if data == nil {
+		data = make(TokenData)
+	}
+	encoded, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode token data: %w", err)
+	}
+	encoded = append(encoded, '\n')
+	if err := util.WriteFileAtomic0600(path, encoded); err != nil {
+		return fmt.Errorf("failed to write token file: %w", err)
+	}
+	return nil
+}
+
+func updateTokenData(skipIfMissing bool, fn func(TokenData) (bool, error)) error {
+	path, err := getTokenFilePath()
+	if err != nil {
+		return err
+	}
+	if skipIfMissing {
+		if _, sErr := os.Stat(path); errors.Is(sErr, os.ErrNotExist) {
+			if _, lErr := os.Stat(path + ".lock"); errors.Is(lErr, os.ErrNotExist) {
+				return nil
+			}
+		}
+	}
+	return util.WithFileLock(path, func() error {
+		data, err := readTokenDataUnlocked(path)
+		if err != nil {
+			return err
+		}
+		changed, err := fn(data)
+		if err != nil || !changed {
+			return err
+		}
+		return writeTokenDataUnlocked(path, data)
+	})
+}
+
 func ReadTokenData() (TokenData, error) {
 	path, err := getTokenFilePath()
 	if err != nil {
 		return nil, err
 	}
-
-	stat, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return make(TokenData), nil
-	} else if err != nil {
-		return nil, fmt.Errorf("failed to stat token file: %w", err)
-	}
-
-	// Check permissions (should be 600)
-	if stat.Mode().Perm() != 0600 {
-		return nil, fmt.Errorf("token file %s has insecure permissions %s, expected 0600", path, stat.Mode().Perm())
-	}
-
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open token file: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-
 	var data TokenData
-	if err := json.NewDecoder(file).Decode(&data); err != nil {
-		return nil, fmt.Errorf("failed to decode token file: %w", err)
+	err = util.WithFileRLock(path, func() error {
+		var rErr error
+		data, rErr = readTokenDataUnlocked(path)
+		return rErr
+	})
+	if err != nil {
+		return nil, err
 	}
-
 	return data, nil
 }
 
@@ -91,21 +166,9 @@ func WriteTokenData(data TokenData) error {
 	if err != nil {
 		return err
 	}
-
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to open token file for writing: %w", err)
-	}
-	_ = os.Chmod(path, 0600)
-	defer func() { _ = file.Close() }()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(data); err != nil {
-		return fmt.Errorf("failed to encode token data: %w", err)
-	}
-
-	return nil
+	return util.WithFileLock(path, func() error {
+		return writeTokenDataUnlocked(path, data)
+	})
 }
 
 func GetTokenEntry(host, suUser string) (TokenEntry, error) {
@@ -156,34 +219,25 @@ func GetToken(host, suUser string) (string, error) {
 
 func DeleteToken(host, suUser string) error {
 	host = util.CleanHost(host)
-	data, err := ReadTokenData()
-	if err != nil {
-		return err
-	}
-	if data == nil {
-		return nil
-	}
-
-	hostTokens, ok := data[host]
-	if !ok {
-		return nil
-	}
-
 	key := "default"
 	if suUser != "" {
 		key = suUser
 	}
 
-	if _, exists := hostTokens[key]; !exists {
-		return nil
-	}
-
-	delete(hostTokens, key)
-	if len(hostTokens) == 0 {
-		delete(data, host)
-	}
-
-	return WriteTokenData(data)
+	return updateTokenData(true, func(data TokenData) (bool, error) {
+		hostTokens, ok := data[host]
+		if !ok {
+			return false, nil
+		}
+		if _, exists := hostTokens[key]; !exists {
+			return false, nil
+		}
+		delete(hostTokens, key)
+		if len(hostTokens) == 0 {
+			delete(data, host)
+		}
+		return true, nil
+	})
 }
 
 func IsRefreshTokenExpired(refreshExpiration, accessExpiration string) bool {
@@ -219,46 +273,39 @@ func StoreImpersonationToken(host, suUser, token string, expiration time.Time) e
 
 func storeToken(host, suUser, token, refreshToken, clientID string, expiration time.Time, impersonated bool) error {
 	host = util.CleanHost(host)
-	data, err := ReadTokenData()
-	if err != nil {
-		return err
-	}
-	if data == nil {
-		data = make(TokenData)
-	}
-
-	hostTokens, ok := data[host]
-	if !ok {
-		hostTokens = make(HostTokens)
-		data[host] = hostTokens
-	}
-
 	key := "default"
 	if suUser != "" {
 		key = suUser
 	}
 
-	refreshExpStr := ""
-	if refreshToken != "" {
-		if existing, exists := hostTokens[key]; exists && existing.RefreshToken == refreshToken && existing.RefreshExpiration != "" {
-			refreshExpStr = existing.RefreshExpiration
-		} else {
-			baseTime := time.Now()
-			if expiration.Before(baseTime) {
-				baseTime = expiration
-			}
-			refreshExpStr = baseTime.Add(RefreshTokenDuration).Format(TimeFormat)
+	return updateTokenData(false, func(data TokenData) (bool, error) {
+		hostTokens, ok := data[host]
+		if !ok {
+			hostTokens = make(HostTokens)
+			data[host] = hostTokens
 		}
-	}
 
-	hostTokens[key] = TokenEntry{
-		Token:             token,
-		Expiration:        expiration.Format(TimeFormat),
-		RefreshToken:      refreshToken,
-		RefreshExpiration: refreshExpStr,
-		ClientID:          clientID,
-		Impersonated:      impersonated,
-	}
+		refreshExpStr := ""
+		if refreshToken != "" {
+			if existing, exists := hostTokens[key]; exists && existing.RefreshToken == refreshToken && existing.RefreshExpiration != "" {
+				refreshExpStr = existing.RefreshExpiration
+			} else {
+				baseTime := time.Now()
+				if expiration.Before(baseTime) {
+					baseTime = expiration
+				}
+				refreshExpStr = baseTime.Add(RefreshTokenDuration).Format(TimeFormat)
+			}
+		}
 
-	return WriteTokenData(data)
+		hostTokens[key] = TokenEntry{
+			Token:             token,
+			Expiration:        expiration.Format(TimeFormat),
+			RefreshToken:      refreshToken,
+			RefreshExpiration: refreshExpStr,
+			ClientID:          clientID,
+			Impersonated:      impersonated,
+		}
+		return true, nil
+	})
 }
