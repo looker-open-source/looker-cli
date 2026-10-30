@@ -33,6 +33,7 @@ type contentMockDoer struct {
 	t          *testing.T
 	looks      map[string]v4.LookWithQuery
 	dashboards map[string]v4.Dashboard
+	alerts     []v4.Alert
 	// hideFolderID makes GET /looks/{id} and GET /dashboards/{id} omit
 	// folder_id, like a caller that didn't request that field.
 	hideFolderID bool
@@ -232,7 +233,7 @@ func (m *contentMockDoer) Do(result interface{}, method, ver, path string, reqPa
 	case method == "POST" && path == "/queries":
 		return respond(result, v4.Query{Id: ptr(m.nextID("query"))})
 	case method == "GET" && path == "/alerts/search":
-		return respond(result, []v4.Alert{})
+		return respond(result, m.alerts)
 	case method == "DELETE":
 		return nil
 	}
@@ -249,11 +250,15 @@ func useContentMock(t *testing.T, m *contentMockDoer) {
 		dashboardMvForce, dashboardMvPlain = false, false
 		dashboardImportForce, dashboardImportPlain = false, false
 		dashboardImportBackupDir = ""
+		dashboardCatTrim, dashboardCatPlans = false, false
+		dashboardCatFields, dashboardCatDir, dashboardCatTransform = "", "", ""
 	})
 	lookMvForce, lookMvPlain = false, false
 	dashboardMvForce, dashboardMvPlain = false, false
 	dashboardImportForce, dashboardImportPlain = false, false
 	dashboardImportBackupDir = ""
+	dashboardCatTrim, dashboardCatPlans = false, false
+	dashboardCatFields, dashboardCatDir, dashboardCatTransform = "", "", ""
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +432,9 @@ func seedExistingSalesDashboard(m *contentMockDoer) {
 			{Id: ptr("layout_500"), Active: ptrBool(true)},
 		},
 	}
+	m.alerts = []v4.Alert{
+		{Id: ptr("alert_1"), CustomTitle: ptr("Revenue Drop Alert"), DashboardElementId: ptr("old_e1")},
+	}
 }
 
 func writeImportFile(t *testing.T, content string) string {
@@ -460,7 +468,7 @@ func TestDashboardImportForce_BacksUpBeforeOverwriting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read backup: %v", err)
 	}
-	for _, want := range []string{"Old Revenue Tile", "Old Orders Tile", "old_region"} {
+	for _, want := range []string{"Old Revenue Tile", "Old Orders Tile", "old_region", "Revenue Drop Alert"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("backup is missing %q from the previous version:\n%s", want, b)
 		}
@@ -578,5 +586,76 @@ func TestDashboardImport_UnreferencedElementIsReported(t *testing.T) {
 	_, err := executeCommand("dashboard", "import", writeImportFile(t, oneComponent), "801")
 	if err == nil || !strings.Contains(err.Error(), `element 1 ("Orders"): not imported because no dashboard layout component references it`) {
 		t.Fatalf("expected the unreferenced element to be reported, got %v", err)
+	}
+}
+
+func setIsolatedCacheDir(t *testing.T) {
+	t.Helper()
+	tmp := t.TempDir()
+	for _, k := range []string{"HOME", "USERPROFILE", "XDG_CACHE_HOME", "LOCALAPPDATA"} {
+		t.Setenv(k, tmp)
+	}
+}
+
+func TestDashboardCat_PreservesElementAlertsWithStringIDs(t *testing.T) {
+	m := newContentMockDoer(t)
+	seedExistingSalesDashboard(m)
+	useContentMock(t, m)
+
+	out, err := executeCommand("dashboard", "cat", "500", "--trim")
+	if err != nil {
+		t.Fatalf("dashboard cat failed: %v", err)
+	}
+	if !strings.Contains(out, "Revenue Drop Alert") {
+		t.Errorf("expected dashboard cat --trim to preserve element alerts on string element IDs, got:\n%s", out)
+	}
+}
+
+func TestDashboardImportForce_DefaultBackupRemovedOnCleanSuccess(t *testing.T) {
+	setIsolatedCacheDir(t)
+	m := newContentMockDoer(t)
+	seedExistingSalesDashboard(m)
+	useContentMock(t, m)
+
+	if _, err := executeCommand("dashboard", "import", writeImportFile(t, importDashJSON), "801", "--force"); err != nil {
+		t.Fatalf("dashboard import failed: %v", err)
+	}
+
+	defaultDir, err := defaultDashboardBackupDir()
+	if err != nil {
+		t.Fatalf("defaultDashboardBackupDir failed: %v", err)
+	}
+	entries, err := os.ReadDir(defaultDir)
+	if err != nil {
+		t.Fatalf("expected default backup dir %s to exist, got err: %v", defaultDir, err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected temporary default backup to be removed after clean success, found %d file(s): %v", len(entries), entries)
+	}
+}
+
+func TestDashboardImportForce_DefaultBackupKeptOnPartialFailure(t *testing.T) {
+	setIsolatedCacheDir(t)
+	m := newContentMockDoer(t)
+	seedExistingSalesDashboard(m)
+	m.fail["POST /dashboard_elements"] = fmt.Errorf("response error. status=422 Validation Failed")
+	useContentMock(t, m)
+
+	_, err := executeCommand("dashboard", "import", writeImportFile(t, importDashJSON), "801", "--force")
+	if err == nil {
+		t.Fatal("expected dashboard import to fail on element creation error")
+	}
+
+	defaultDir, dirErr := defaultDashboardBackupDir()
+	if dirErr != nil {
+		t.Fatalf("defaultDashboardBackupDir failed: %v", dirErr)
+	}
+	entries, readErr := os.ReadDir(defaultDir)
+	if readErr != nil || len(entries) != 1 {
+		t.Fatalf("expected 1 backup file retained in %s after partial failure, got %v (err %v)", defaultDir, entries, readErr)
+	}
+	backupFile := filepath.Join(defaultDir, entries[0].Name())
+	if !strings.Contains(err.Error(), backupFile) {
+		t.Errorf("expected error to mention retained backup %s, got:\n%s", backupFile, err.Error())
 	}
 }

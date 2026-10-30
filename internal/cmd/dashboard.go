@@ -82,8 +82,7 @@ func CatDashboardHelper(c *client.ClientWrapper, dID string, trim bool, plans bo
 		if elements, ok := m["dashboard_elements"].([]interface{}); ok {
 			for i, ev := range elements {
 				if em, ok := ev.(map[string]interface{}); ok {
-					if idVal, ok := em["id"].(float64); ok {
-						eID := strconv.FormatInt(int64(idVal), 10)
+					if eID := idToStr(em["id"]); eID != "" {
 						if aList, ok := elemAlerts[eID]; ok {
 							em["alerts"] = aList
 						}
@@ -552,6 +551,7 @@ var dashboardImportCmd = &cobra.Command{
 		var resultDash *v4.Dashboard
 		var problems importErrors
 		backupPath := ""
+		keepBackup := dashboardImportBackupDir != ""
 
 		if existingDash != nil {
 			if cfgDebug {
@@ -569,7 +569,11 @@ var dashboardImportCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("not overwriting dashboard %s because backing it up failed: %w", *existingDash.Id, err)
 			}
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Saved a backup of dashboard %s to %s\n", *existingDash.Id, backupPath)
+			if keepBackup {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Saved a backup of dashboard %s to %s\n", *existingDash.Id, backupPath)
+			} else if cfgDebug {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Saved temporary backup of dashboard %s to %s\n", *existingDash.Id, backupPath)
+			}
 
 			wd.FolderId = nil
 			wd.UserId = nil
@@ -593,6 +597,9 @@ var dashboardImportCmd = &cobra.Command{
 					updated, err = c.SDK.UpdateDashboard(edID, wd, nil)
 				}
 				if err != nil {
+					if !keepBackup {
+						_ = os.Remove(backupPath)
+					}
 					return fmt.Errorf("failed to update dashboard %s: %w", edID, err)
 				}
 			}
@@ -1047,6 +1054,9 @@ var dashboardImportCmd = &cobra.Command{
 		if !problems.empty() {
 			return problems.summary(resID, folderID, backupPath)
 		}
+		if backupPath != "" && !keepBackup {
+			_ = os.Remove(backupPath)
+		}
 
 		if dashboardImportPlain {
 			fmt.Println(resID)
@@ -1270,7 +1280,7 @@ func init() {
 
 	dashboardImportCmd.Flags().BoolVar(&dashboardImportForce, "force", false, "Overwrite existing dashboard")
 	dashboardImportCmd.Flags().BoolVar(&dashboardImportPlain, "plain", false, "Output only dashboard id")
-	dashboardImportCmd.Flags().StringVar(&dashboardImportBackupDir, "backup-dir", "", "Directory for the backup made before --force overwrites a dashboard (default: <user cache dir>/looker-cli/backups)")
+	dashboardImportCmd.Flags().StringVar(&dashboardImportBackupDir, "backup-dir", "", "Directory to keep the pre-overwrite backup made by --force (by default a temporary backup in <user cache dir>/looker-cli/backups is kept only if the import fails)")
 
 	dashboardMvCmd.Flags().BoolVar(&dashboardMvForce, "force", false, "Overwrite a dashboard with the same name in the target folder")
 	dashboardMvCmd.Flags().BoolVar(&dashboardMvPlain, "plain", false, "Output only dashboard id")
