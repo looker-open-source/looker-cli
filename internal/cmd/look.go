@@ -16,15 +16,15 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"strconv"
+	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/util"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -181,9 +181,13 @@ var lookCatCmd = &cobra.Command{
 		outBytes, _ := json.MarshalIndent(m, "", "  ")
 		if lookCatDir != "" {
 			title := ""
-			if v, ok := m["title"].(string); ok { title = v }
-			fn := fmt.Sprintf("%s/Look_%s_%s.json", lookCatDir, lID, strings.ReplaceAll(title, "/", "_"))
-			_ = os.WriteFile(fn, outBytes, 0644)
+			if v, ok := m["title"].(string); ok {
+				title = v
+			}
+			fn := filepath.Join(lookCatDir, fmt.Sprintf("Look_%s_%s.json", lID, strings.ReplaceAll(title, "/", "_")))
+			if err := writeOutputFile(fn, outBytes); err != nil {
+				return err
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(string(outBytes))
@@ -247,6 +251,39 @@ var lookImportCmd = &cobra.Command{
 		if !ok {
 			return fmt.Errorf("look file missing query object")
 		}
+
+		title := ""
+		if v, ok := m["title"].(string); ok {
+			title = v
+		}
+		slug := ""
+		if v, ok := m["slug"].(string); ok {
+			slug = v
+		}
+
+		var existingLook *v4.LookWithQuery
+		folderLooks, err := c.SDK.FolderLooks(folderID, "", nil)
+		if err != nil {
+			return fmt.Errorf("failed to list looks in folder %s: %w", folderID, err)
+		}
+		for i, fl := range folderLooks {
+			if fl.Id == nil {
+				continue
+			}
+			if slug != "" && fl.PublicSlug != nil && *fl.PublicSlug == slug {
+				existingLook = &folderLooks[i]
+				break
+			}
+			if title != "" && fl.Title != nil && *fl.Title == title {
+				existingLook = &folderLooks[i]
+				break
+			}
+		}
+
+		if existingLook != nil && !lookImportForce {
+			return fmt.Errorf("look '%s' already exists in folder %s. Use --force to overwrite", title, folderID)
+		}
+
 		qb, _ := json.Marshal(qVal)
 		var wq v4.WriteQuery
 		_ = json.Unmarshal(qb, &wq)
@@ -256,30 +293,6 @@ var lookImportCmd = &cobra.Command{
 			return fmt.Errorf("failed to create query: %v", err)
 		}
 		qID := *createdQuery.Id
-
-		title := ""
-		if v, ok := m["title"].(string); ok { title = v }
-		slug := ""
-		if v, ok := m["slug"].(string); ok { slug = v }
-
-		var existingLook *v4.LookWithQuery
-
-		folderLooks, err := c.SDK.FolderLooks(folderID, "", nil)
-		if err == nil {
-			for i, fl := range folderLooks {
-				if fl.Id == nil {
-					continue
-				}
-				if slug != "" && fl.PublicSlug != nil && *fl.PublicSlug == slug {
-					existingLook = &folderLooks[i]
-					break
-				}
-				if title != "" && fl.Title != nil && *fl.Title == title {
-					existingLook = &folderLooks[i]
-					break
-				}
-			}
-		}
 
 		lb, _ := json.Marshal(m)
 		var wl v4.WriteLookWithQuery
@@ -291,9 +304,6 @@ var lookImportCmd = &cobra.Command{
 		var resultLook *v4.LookWithQuery
 
 		if existingLook != nil {
-			if !lookImportForce {
-				return fmt.Errorf("look '%s' already exists in folder %s. Use --force to overwrite", title, folderID)
-			}
 			elID := *existingLook.Id
 			updated, err := c.SDK.UpdateLook(elID, wl, "", nil)
 			if err != nil {
@@ -308,11 +318,17 @@ var lookImportCmd = &cobra.Command{
 			resultLook = &created
 		}
 
+		if resultLook.Id == nil {
+			return fmt.Errorf("server returned no id for imported look")
+		}
 		resID := *resultLook.Id
 
+		var planErrs []error
 		if plansVal, ok := m["scheduled_plans"].([]interface{}); ok && len(plansVal) > 0 {
-			existingPlans, _ := c.SDK.ScheduledPlansForLook(v4.RequestScheduledPlansForLook{LookId: resID, AllUsers: ptrBool(true)}, nil)
-			myIDInt, _ := strconv.ParseInt(myID, 10, 64)
+			existingPlans, err := c.SDK.ScheduledPlansForLook(v4.RequestScheduledPlansForLook{LookId: resID, AllUsers: ptrBool(true)}, nil)
+			if err != nil {
+				planErrs = append(planErrs, fmt.Errorf("failed to list existing scheduled plans: %w", err))
+			}
 
 			for _, pv := range plansVal {
 				pb, _ := json.Marshal(pv)
@@ -323,23 +339,35 @@ var lookImportCmd = &cobra.Command{
 
 				var matchedPlan *v4.ScheduledPlan
 				pName := ""
-				if wsp.Name != nil { pName = *wsp.Name }
-				for _, ep := range existingPlans {
+				if wsp.Name != nil {
+					pName = *wsp.Name
+				}
+				for i := range existingPlans {
+					ep := existingPlans[i]
 					epName := ""
-					if ep.Name != nil { epName = *ep.Name }
-					if epName == pName && ep.UserId != nil && *ep.UserId == strconv.FormatInt(myIDInt, 10) {
+					if ep.Name != nil {
+						epName = *ep.Name
+					}
+					if epName == pName && ep.UserId != nil && *ep.UserId == myID && ep.Id != nil {
 						matchedPlan = &ep
 						break
 					}
 				}
 
 				if matchedPlan != nil {
-					mpID := *matchedPlan.Id
-					_, _ = c.SDK.UpdateScheduledPlan(mpID, wsp, nil)
+					if _, err := c.SDK.UpdateScheduledPlan(*matchedPlan.Id, wsp, nil); err != nil {
+						planErrs = append(planErrs, fmt.Errorf("failed to update scheduled plan %q: %w", pName, err))
+					}
 				} else {
-					_, _ = c.SDK.CreateScheduledPlan(wsp, nil)
+					if _, err := c.SDK.CreateScheduledPlan(wsp, nil); err != nil {
+						planErrs = append(planErrs, fmt.Errorf("failed to create scheduled plan %q: %w", pName, err))
+					}
 				}
 			}
+		}
+
+		if len(planErrs) > 0 {
+			return fmt.Errorf("look %s was imported with %d scheduled plan error(s): %w", resID, len(planErrs), errors.Join(planErrs...))
 		}
 
 		if lookImportPlain {
@@ -353,28 +381,35 @@ var lookImportCmd = &cobra.Command{
 
 func UpsertLookHelper(c *client.ClientWrapper, folderID, myID string, m map[string]interface{}, force bool) (string, error) {
 	title := ""
-	if v, ok := m["title"].(string); ok { title = v }
+	if v, ok := m["title"].(string); ok {
+		title = v
+	}
 	slug := ""
-	if v, ok := m["slug"].(string); ok { slug = v }
+	if v, ok := m["slug"].(string); ok {
+		slug = v
+	}
 	if slug == "" {
-		if v, ok := m["public_slug"].(string); ok { slug = v }
+		if v, ok := m["public_slug"].(string); ok {
+			slug = v
+		}
 	}
 
 	var existingLook *v4.LookWithQuery
 	folderLooks, err := c.SDK.FolderLooks(folderID, "", nil)
-	if err == nil {
-		for i, fl := range folderLooks {
-			if fl.Id == nil {
-				continue
-			}
-			if slug != "" && fl.PublicSlug != nil && *fl.PublicSlug == slug {
-				existingLook = &folderLooks[i]
-				break
-			}
-			if title != "" && fl.Title != nil && *fl.Title == title {
-				existingLook = &folderLooks[i]
-				break
-			}
+	if err != nil {
+		return "", fmt.Errorf("failed to list looks in folder %s: %w", folderID, err)
+	}
+	for i, fl := range folderLooks {
+		if fl.Id == nil {
+			continue
+		}
+		if slug != "" && fl.PublicSlug != nil && *fl.PublicSlug == slug {
+			existingLook = &folderLooks[i]
+			break
+		}
+		if title != "" && fl.Title != nil && *fl.Title == title {
+			existingLook = &folderLooks[i]
+			break
 		}
 	}
 

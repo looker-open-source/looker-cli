@@ -17,13 +17,15 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/util"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -47,39 +49,46 @@ var HealthPulseCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Println("Running all health pulse checks...")
-		fmt.Println("=================================")
+		fmt.Fprintln(os.Stderr, "Running all health pulse checks...")
+		fmt.Fprintln(os.Stderr, "=================================")
 
+		var errs []error
 		if err := runDBConnectionsCheck(cmd.Context(), c, healthPulsePlain, healthPulseCSV); err != nil {
-			fmt.Printf("Error checking DB connections: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error checking DB connections: %v\n", err)
+			errs = append(errs, fmt.Errorf("db-connections: %w", err))
 		}
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
 
 		if err := runDashboardPerformanceCheck(cmd.Context(), c, healthPulsePlain, healthPulseCSV); err != nil {
-			fmt.Printf("Error checking dashboard performance: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error checking dashboard performance: %v\n", err)
+			errs = append(errs, fmt.Errorf("dashboard-performance: %w", err))
 		}
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
 
 		if err := runDashboardErrorsCheck(cmd.Context(), c, healthPulsePlain, healthPulseCSV); err != nil {
-			fmt.Printf("Error checking dashboard errors: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error checking dashboard errors: %v\n", err)
+			errs = append(errs, fmt.Errorf("dashboard-errors: %w", err))
 		}
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
 
 		if err := runExplorePerformanceCheck(cmd.Context(), c, healthPulsePlain, healthPulseCSV); err != nil {
-			fmt.Printf("Error checking explore performance: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error checking explore performance: %v\n", err)
+			errs = append(errs, fmt.Errorf("explore-performance: %w", err))
 		}
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
 
 		if err := runScheduleFailuresCheck(cmd.Context(), c, healthPulsePlain, healthPulseCSV); err != nil {
-			fmt.Printf("Error checking schedule failures: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error checking schedule failures: %v\n", err)
+			errs = append(errs, fmt.Errorf("schedule-failures: %w", err))
 		}
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
 
 		if err := runLegacyFeaturesCheck(cmd.Context(), c, healthPulsePlain, healthPulseCSV); err != nil {
-			fmt.Printf("Error checking legacy features: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error checking legacy features: %v\n", err)
+			errs = append(errs, fmt.Errorf("legacy-features: %w", err))
 		}
 
-		return nil
+		return errors.Join(errs...)
 	},
 }
 
@@ -156,7 +165,7 @@ var pulseLegacyFeaturesCmd = &cobra.Command{
 }
 
 func runDBConnectionsCheck(ctx context.Context, c *client.ClientWrapper, plain, csv bool) error {
-	fmt.Println("Test 1/6: Checking DB Connections")
+	fmt.Fprintln(os.Stderr, "Test 1/6: Checking DB Connections")
 	reservedNames := map[string]struct{}{
 		"looker__internal__analytics__replica": {},
 		"looker__internal__analytics":          {},
@@ -179,7 +188,7 @@ func runDBConnectionsCheck(ctx context.Context, c *client.ClientWrapper, plain, 
 		}
 	}
 	if len(filteredConnections) == 0 {
-		fmt.Println("No connections found.")
+		fmt.Fprintln(os.Stderr, "No connections found.")
 		return nil
 	}
 
@@ -247,7 +256,7 @@ func runDBConnectionsCheck(ctx context.Context, c *client.ClientWrapper, plain, 
 }
 
 func runDashboardPerformanceCheck(ctx context.Context, c *client.ClientWrapper, plain, csv bool) error {
-	fmt.Println("Test 2/6: Checking for dashboards with queries slower than 30 seconds in the last 7 days")
+	fmt.Fprintln(os.Stderr, "Test 2/6: Checking for dashboards with queries slower than 30 seconds in the last 7 days")
 	limit := "20"
 	query := &v4.WriteQuery{
 		Model:  "system__activity",
@@ -295,7 +304,7 @@ func runDashboardPerformanceCheck(ctx context.Context, c *client.ClientWrapper, 
 }
 
 func runDashboardErrorsCheck(ctx context.Context, c *client.ClientWrapper, plain, csv bool) error {
-	fmt.Println("Test 3/6: Checking for dashboards with erroring queries in the last 7 days")
+	fmt.Fprintln(os.Stderr, "Test 3/6: Checking for dashboards with erroring queries in the last 7 days")
 	limit := "20"
 	query := &v4.WriteQuery{
 		Model:  "system__activity",
@@ -343,7 +352,7 @@ func runDashboardErrorsCheck(ctx context.Context, c *client.ClientWrapper, plain
 }
 
 func runExplorePerformanceCheck(ctx context.Context, c *client.ClientWrapper, plain, csv bool) error {
-	fmt.Println("Test 4/6: Checking for the slowest explores in the past 7 days")
+	fmt.Fprintln(os.Stderr, "Test 4/6: Checking for the slowest explores in the past 7 days")
 	limit := "20"
 	query := &v4.WriteQuery{
 		Model:  "system__activity",
@@ -391,7 +400,7 @@ func runExplorePerformanceCheck(ctx context.Context, c *client.ClientWrapper, pl
 		var avgData []map[string]interface{}
 		if err := json.Unmarshal([]byte(rawAvg), &avgData); err == nil && len(avgData) > 0 {
 			if avgRuntime, ok := avgData[0]["history.average_runtime"].(float64); ok {
-				fmt.Printf("For context, the average query runtime is %.4fs\n", avgRuntime)
+				fmt.Fprintf(os.Stderr, "For context, the average query runtime is %.4fs\n", avgRuntime)
 			}
 		}
 	}
@@ -418,7 +427,7 @@ func runExplorePerformanceCheck(ctx context.Context, c *client.ClientWrapper, pl
 }
 
 func runScheduleFailuresCheck(ctx context.Context, c *client.ClientWrapper, plain, csv bool) error {
-	fmt.Println("Test 5/6: Checking for failing schedules")
+	fmt.Fprintln(os.Stderr, "Test 5/6: Checking for failing schedules")
 	limit := "500"
 	query := &v4.WriteQuery{
 		Model:  "system__activity",
@@ -464,11 +473,11 @@ func runScheduleFailuresCheck(ctx context.Context, c *client.ClientWrapper, plai
 }
 
 func runLegacyFeaturesCheck(ctx context.Context, c *client.ClientWrapper, plain, csv bool) error {
-	fmt.Println("Test 6/6: Checking for enabled legacy features")
+	fmt.Fprintln(os.Stderr, "Test 6/6: Checking for enabled legacy features")
 	features, err := c.SDK.AllLegacyFeatures(nil)
 	if err != nil {
 		if strings.Contains(err.Error(), "Unsupported in Looker (Google Cloud core)") {
-			fmt.Println("Legacy features check: Unsupported in Looker (Google Cloud core)")
+			fmt.Fprintln(os.Stderr, "Legacy features check: Unsupported in Looker (Google Cloud core)")
 			return nil
 		}
 		return err
@@ -485,7 +494,7 @@ func runLegacyFeaturesCheck(ctx context.Context, c *client.ClientWrapper, plain,
 	}
 
 	if !hasLegacy {
-		fmt.Println("No legacy features enabled.")
+		fmt.Fprintln(os.Stderr, "No legacy features enabled.")
 		return nil
 	}
 

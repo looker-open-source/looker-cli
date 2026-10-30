@@ -17,13 +17,13 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/spf13/cobra"
-	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/looker-open-source/looker-cli/internal/util"
+	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -98,8 +98,12 @@ var permissionTreeCmd = &cobra.Command{
 func buildTree(data []v4.Permission) string {
 	sort.Slice(data, func(i, j int) bool {
 		pI, pJ := "", ""
-		if data[i].Permission != nil { pI = *data[i].Permission }
-		if data[j].Permission != nil { pJ = *data[j].Permission }
+		if data[i].Permission != nil {
+			pI = *data[i].Permission
+		}
+		if data[j].Permission != nil {
+			pJ = *data[j].Permission
+		}
 		return pI < pJ
 	})
 
@@ -220,8 +224,10 @@ var permissionSetCatCmd = &cobra.Command{
 			if v, ok := m["name"].(string); ok {
 				name = v
 			}
-			fn := fmt.Sprintf("%s/Permission_Set_%s.json", permissionSetCatDir, name)
-			_ = os.WriteFile(fn, outBytes, 0644)
+			fn := filepath.Join(permissionSetCatDir, fmt.Sprintf("Permission_Set_%s.json", name))
+			if err := writeOutputFile(fn, outBytes); err != nil {
+				return err
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(string(outBytes))

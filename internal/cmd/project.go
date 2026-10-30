@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/looker-open-source/looker-cli/internal/util"
@@ -54,10 +54,14 @@ var projectLsCmd = &cobra.Command{
 	Short: "List all projects",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		projects, err := c.SDK.AllProjects(projectLsFields, nil)
-		if err != nil { return fmt.Errorf("failed to list projects: %w", err) }
+		if err != nil {
+			return fmt.Errorf("failed to list projects: %w", err)
+		}
 
 		headers := util.ParseFieldsForHeaders(projectLsFields)
 
@@ -76,10 +80,14 @@ var projectCatCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		pID := args[0]
 		project, err := c.SDK.Project(pID, projectCatFields, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		b, _ := json.Marshal(project)
 		var m map[string]interface{}
@@ -87,30 +95,34 @@ var projectCatCmd = &cobra.Command{
 
 		if projectCatTrim {
 			keep := map[string]bool{
-				"name":                           true,
-				"git_remote_url":                 true,
-				"git_username":                   true,
-				"git_production_branch_name":     true,
-				"use_git_cookie_auth":            true,
-				"git_username_user_attribute":    true,
-				"git_password_user_attribute":    true,
-				"git_service_name":               true,
-				"git_application_server_http_port": true,
+				"name":                               true,
+				"git_remote_url":                     true,
+				"git_username":                       true,
+				"git_production_branch_name":         true,
+				"use_git_cookie_auth":                true,
+				"git_username_user_attribute":        true,
+				"git_password_user_attribute":        true,
+				"git_service_name":                   true,
+				"git_application_server_http_port":   true,
 				"git_application_server_http_scheme": true,
-				"pull_request_mode":              true,
-				"validation_required":            true,
-				"git_release_mgmt_enabled":       true,
-				"allow_warnings":                 true,
+				"pull_request_mode":                  true,
+				"validation_required":                true,
+				"git_release_mgmt_enabled":           true,
+				"allow_warnings":                     true,
 			}
 			for k := range m {
-				if !keep[k] { delete(m, k) }
+				if !keep[k] {
+					delete(m, k)
+				}
 			}
 		}
 
 		outBytes, _ := json.MarshalIndent(m, "", "  ")
 		if projectCatDir != "" {
-			fn := fmt.Sprintf("%s/Project_%s.json", projectCatDir, pID)
-			_ = os.WriteFile(fn, outBytes, 0644)
+			fn := filepath.Join(projectCatDir, fmt.Sprintf("Project_%s.json", pID))
+			if err := writeOutputFile(fn, outBytes); err != nil {
+				return err
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(string(outBytes))
@@ -125,17 +137,25 @@ var projectImportCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		file := args[0]
 
 		b, err := util.ReadFileOrStdin(file)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		var wp v4.WriteProject
-		if err := json.Unmarshal(b, &wp); err != nil { return err }
+		if err := json.Unmarshal(b, &wp); err != nil {
+			return err
+		}
 
 		project, err := c.SDK.CreateProject(wp, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		fmt.Printf("Imported project %s\n", *project.Id)
 		return nil
@@ -148,18 +168,26 @@ var projectUpdateCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		pID := args[0]
 		file := args[1]
 
 		b, err := util.ReadFileOrStdin(file)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		var wp v4.WriteProject
-		if err := json.Unmarshal(b, &wp); err != nil { return err }
+		if err := json.Unmarshal(b, &wp); err != nil {
+			return err
+		}
 
 		project, err := c.SDK.UpdateProject(pID, wp, "", nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		fmt.Printf("Updated project %s\n", *project.Id)
 		return nil
@@ -172,11 +200,15 @@ var projectDeployKeyCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		pID := args[0]
 
 		key, err := c.SDK.CreateGitDeployKey(pID, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		fmt.Println(key)
 		return nil
@@ -264,22 +296,30 @@ var projectBranchCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		pID := args[0]
 
 		headers := strings.Split(projectBranchFields, ",")
-		for i := range headers { headers[i] = strings.TrimSpace(headers[i]) }
+		for i := range headers {
+			headers[i] = strings.TrimSpace(headers[i])
+		}
 		table := util.NewTable(headers)
 
 		if projectBranchAll {
 			branches, err := c.SDK.AllGitBranches(pID, nil)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			for _, b := range branches {
 				table.Append(extractFields(b, projectBranchFields))
 			}
 		} else {
 			branch, err := c.SDK.GitBranch(pID, nil)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			table.Append(extractFields(branch, projectBranchFields))
 		}
 
@@ -294,11 +334,15 @@ var projectDeployCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		pID := args[0]
 
 		_, err = c.SDK.DeployToProduction(pID, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		fmt.Printf("Deployed project %s to production.\n", pID)
 		return nil
@@ -311,13 +355,17 @@ var projectCheckoutCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		pID := args[0]
 		branch := args[1]
 
 		wgb := v4.WriteGitBranch{Name: &branch}
 		_, err = c.SDK.UpdateGitBranch(pID, wgb, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		fmt.Printf("Checked out branch %s for project %s.\n", branch, pID)
 		return nil
@@ -330,7 +378,9 @@ var projectCreateCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		name := args[0]
 
 		wp := v4.WriteProject{
@@ -338,7 +388,9 @@ var projectCreateCmd = &cobra.Command{
 		}
 
 		project, err := c.SDK.CreateProject(wp, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		fmt.Printf("Created project %s\n", *project.Id)
 		return nil
@@ -351,11 +403,15 @@ var projectValidateCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		pID := args[0]
 
 		validation, err := c.SDK.ValidateProject(pID, "", nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		if validation.Errors == nil || len(*validation.Errors) == 0 {
 			fmt.Println("Project is valid.")

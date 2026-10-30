@@ -17,13 +17,12 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
 	"strings"
 
-	"github.com/spf13/cobra"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -50,7 +49,9 @@ var queryRunCmd = &cobra.Command{
 		}
 
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		var qDef string
 		if queryRunInputFile != "" {
@@ -89,15 +90,7 @@ var queryRunCmd = &cobra.Command{
 			}
 		}
 
-		var outWriter io.Writer = os.Stdout
-		var file *os.File
-		if queryRunOutputFile != "" {
-			file, err = os.Create(queryRunOutputFile)
-			if err != nil { return err }
-			defer func() { _ = file.Close() }()
-			outWriter = file
-		}
-
+		var res string
 		if qID != "" || qSlug != "" {
 			if qSlug != "" {
 				q, err := c.SDK.QueryForSlug(qSlug, "id", nil)
@@ -112,26 +105,41 @@ var queryRunCmd = &cobra.Command{
 				QueryId:      qID,
 				ResultFormat: format,
 			}
-			res, err := c.SDK.RunQuery(req, nil)
-			if err != nil { return err }
-			_, _ = outWriter.Write([]byte(res))
+			res, err = c.SDK.RunQuery(req, nil)
+			if err != nil {
+				return err
+			}
 		} else {
 			// RunInlineQuery
-			qb, _ := json.Marshal(qHash)
+			qb, err := json.Marshal(qHash)
+			if err != nil {
+				return fmt.Errorf("failed to marshal inline query: %w", err)
+			}
 			var wq v4.WriteQuery
-			_ = json.Unmarshal(qb, &wq)
+			if err := json.Unmarshal(qb, &wq); err != nil {
+				return fmt.Errorf("invalid inline query definition: %w", err)
+			}
 
 			req := v4.RequestRunInlineQuery{
 				ResultFormat: format,
 				Body:         wq,
 			}
-			res, err := c.SDK.RunInlineQuery(req, nil)
-			if err != nil { return err }
-			_, _ = outWriter.Write([]byte(res))
+			res, err = c.SDK.RunInlineQuery(req, nil)
+			if err != nil {
+				return err
+			}
 		}
 
 		if queryRunOutputFile != "" {
+			if err := writeOutputFile(queryRunOutputFile, []byte(res)); err != nil {
+				return err
+			}
 			fmt.Printf("Wrote %s\n", queryRunOutputFile)
+			return nil
+		}
+
+		if _, err := os.Stdout.Write([]byte(res)); err != nil {
+			return fmt.Errorf("failed to write query output: %w", err)
 		}
 		return nil
 	},

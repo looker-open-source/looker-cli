@@ -108,14 +108,11 @@ func WithFileRLock(path string, fn func() error) error {
 	return fn()
 }
 
-// WriteFileAtomic0600 writes data to a 0600 temporary file in path's parent
-// directory, fsyncs and closes it, and atomically renames it over path.
-func WriteFileAtomic0600(path string, data []byte) error {
+// WriteFileAtomic writes data to a temporary file in path's parent directory
+// with perm permissions, fsyncs and closes it, and atomically renames it over
+// path. The parent directory must already exist.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
-	}
-
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file in %s: %w", dir, err)
@@ -130,7 +127,7 @@ func WriteFileAtomic0600(path string, data []byte) error {
 	}()
 
 	if runtime.GOOS != "windows" {
-		if err := tmp.Chmod(0o600); err != nil {
+		if err := tmp.Chmod(perm); err != nil {
 			return fmt.Errorf("failed to set permissions on temp file: %w", err)
 		}
 	}
@@ -150,4 +147,14 @@ func WriteFileAtomic0600(path string, data []byte) error {
 	}
 	cleanup = false
 	return nil
+}
+
+// WriteFileAtomic0600 ensures path's parent directory exists (mode 0700) and
+// atomically writes data to path with 0600 permissions.
+func WriteFileAtomic0600(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+	return WriteFileAtomic(path, data, 0o600)
 }

@@ -17,13 +17,16 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/util"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -142,12 +145,13 @@ func getUnusedExplores(ctx context.Context, c *client.ClientWrapper, modelName s
 			}
 			rawQueryCount, err := c.SDK.RunInlineQuery(req, nil)
 			if err != nil {
-				// Log and continue
-				continue
+				return nil, fmt.Errorf("error querying usage for explore %s.%s: %w", modelName, *e.Name, err)
 			}
 
 			var data []map[string]interface{}
-			_ = json.Unmarshal([]byte(rawQueryCount), &data)
+			if err := json.Unmarshal([]byte(rawQueryCount), &data); err != nil {
+				return nil, fmt.Errorf("error parsing usage response for explore %s.%s: %w", modelName, *e.Name, err)
+			}
 			if len(data) == 0 {
 				unusedExplores = append(unusedExplores, *e.Name)
 			}
@@ -164,6 +168,7 @@ func runVacuumExplores(ctx context.Context, c *client.ClientWrapper, model, expl
 
 	headers := []string{"Model", "Explore", "Unused Joins", "Unused Fields"}
 	table := util.NewTable(headers)
+	var errs []error
 
 	for _, m := range lookmlModels {
 		if m.Name == nil {
@@ -189,13 +194,15 @@ func runVacuumExplores(ctx context.Context, c *client.ClientWrapper, model, expl
 				ExploreName:     *e.Name,
 			}, nil)
 			if err != nil {
-				fmt.Printf("Error fetching detail for explore %s.%s: %v\n", *m.Name, *e.Name, err)
+				fmt.Fprintf(os.Stderr, "Error fetching detail for explore %s.%s: %v\n", *m.Name, *e.Name, err)
+				errs = append(errs, fmt.Errorf("error fetching detail for explore %s.%s: %w", *m.Name, *e.Name, err))
 				continue
 			}
 
 			usedFields, err := getUsedExploreFields(ctx, c, *m.Name, *e.Name, timeframe)
 			if err != nil {
-				fmt.Printf("Error fetching used fields for explore %s.%s: %v\n", *m.Name, *e.Name, err)
+				fmt.Fprintf(os.Stderr, "Error fetching used fields for explore %s.%s: %v\n", *m.Name, *e.Name, err)
+				errs = append(errs, fmt.Errorf("error fetching used fields for explore %s.%s: %w", *m.Name, *e.Name, err))
 				continue
 			}
 
@@ -248,6 +255,7 @@ func runVacuumExplores(ctx context.Context, c *client.ClientWrapper, model, expl
 					unusedJoins = append(unusedJoins, join)
 				}
 			}
+			slices.Sort(unusedJoins)
 
 			table.Append([]string{
 				*m.Name,
@@ -259,7 +267,7 @@ func runVacuumExplores(ctx context.Context, c *client.ClientWrapper, model, expl
 	}
 
 	table.Render(plain, csv)
-	return nil
+	return errors.Join(errs...)
 }
 
 func init() {

@@ -47,16 +47,25 @@ var (
 )
 
 var RootCmd = &cobra.Command{
-	Use:   "looker-cli",
-	Short: "Looker CLI - A Looker Content Utility",
-	Long:  `Looker CLI can be used to navigate and manage Folders, Looks, and Dashboards via a simple command line tool.`,
+	Use:           "looker-cli",
+	Short:         "Looker CLI - A Looker Content Utility",
+	Long:          `Looker CLI can be used to navigate and manage Folders, Looks, and Dashboards via a simple command line tool.`,
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 func Execute() {
 	if err := RootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func writeOutputFile(path string, data []byte) error {
+	if err := util.WriteFileAtomic(path, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", path, err)
+	}
+	return nil
 }
 
 func init() {

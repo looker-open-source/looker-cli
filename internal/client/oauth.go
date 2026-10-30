@@ -36,16 +36,15 @@ import (
 
 var oauthStdin io.Reader = os.Stdin
 
-
 const (
 	redirectPort = "7777"
 	redirectURI  = "http://127.0.0.1:" + redirectPort
 )
 
 type tokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int64  `json:"expires_in"`
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
 	RefreshToken string `json:"refresh_token"`
 }
 
@@ -120,26 +119,26 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("Warning: local callback server failed to start: %v. Automatic redirect will not work, but you can still use the manual fallback.\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: local callback server failed to start: %v. Automatic redirect will not work, but you can still use the manual fallback.\n", err)
 		}
 	}()
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	if isSSHSession() {
-		fmt.Println("=======================================================================")
-		fmt.Println("SSH session detected! You can:")
-		fmt.Println("A. (Recommended) Copy the authorization URL below into your local browser.")
-		fmt.Println("   After authorizing, copy the redirected URL (even if it fails to load)")
-		fmt.Println("   and paste it back here to complete login.")
-		fmt.Println("B. Forward port 7777 back to your local machine:")
-		fmt.Println("   ssh -L 7777:127.0.0.1:7777 user@remote-host")
-		fmt.Println("=======================================================================")
+		fmt.Fprintln(os.Stderr, "=======================================================================")
+		fmt.Fprintln(os.Stderr, "SSH session detected! You can:")
+		fmt.Fprintln(os.Stderr, "A. (Recommended) Copy the authorization URL below into your local browser.")
+		fmt.Fprintln(os.Stderr, "   After authorizing, copy the redirected URL (even if it fails to load)")
+		fmt.Fprintln(os.Stderr, "   and paste it back here to complete login.")
+		fmt.Fprintln(os.Stderr, "B. Forward port 7777 back to your local machine:")
+		fmt.Fprintln(os.Stderr, "   ssh -L 7777:127.0.0.1:7777 user@remote-host")
+		fmt.Fprintln(os.Stderr, "=======================================================================")
 	}
 
-	fmt.Printf("Opening browser to URL: %s\n", authURL.String())
+	fmt.Fprintf(os.Stderr, "Opening browser to URL: %s\n", authURL.String())
 	browserOpened := true
 	if err := browser.OpenURL(authURL.String()); err != nil {
-		fmt.Printf("Failed to open browser automatically. Please visit the URL above.\n")
+		fmt.Fprintf(os.Stderr, "Failed to open browser automatically. Please visit the URL above.\n")
 		browserOpened = false
 	}
 
@@ -149,11 +148,11 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 	go func() {
 		// Only print fallback instructions if browser failed to open, or after 1.5s if no response yet
 		if !browserOpened {
-			fmt.Println("\n--- OAuth Stdin Fallback ---")
-			fmt.Println("Please open the URL above in a browser.")
-			fmt.Printf("After authorizing, you will be redirected to %s/?code=...\n", redirectURI)
-			fmt.Println("Copy the full redirected URL and paste it below.")
-			fmt.Print("Paste redirected URL here: ")
+			fmt.Fprintln(os.Stderr, "\n--- OAuth Stdin Fallback ---")
+			fmt.Fprintln(os.Stderr, "Please open the URL above in a browser.")
+			fmt.Fprintf(os.Stderr, "After authorizing, you will be redirected to %s/?code=...\n", redirectURI)
+			fmt.Fprintln(os.Stderr, "Copy the full redirected URL and paste it below.")
+			fmt.Fprint(os.Stderr, "Paste redirected URL here: ")
 		} else {
 			// Wait a bit before printing instructions to not clutter automatic redirect flow
 			select {
@@ -161,12 +160,12 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 				return
 			case <-time.After(1500 * time.Millisecond):
 				// If we got here, maybe browser is slow or didn't actually open, or redirect is taking time
-				fmt.Println("\n--- OAuth Stdin Fallback ---")
-				fmt.Println("If the browser did not open or redirect automatically, please:")
-				fmt.Println("1. Copy the URL above into your browser.")
-				fmt.Printf("2. After authorizing, copy the redirected URL (starting with %s/?code=...)\n", redirectURI)
-				fmt.Println("3. Paste the URL here.")
-				fmt.Print("Paste redirected URL here: ")
+				fmt.Fprintln(os.Stderr, "\n--- OAuth Stdin Fallback ---")
+				fmt.Fprintln(os.Stderr, "If the browser did not open or redirect automatically, please:")
+				fmt.Fprintln(os.Stderr, "1. Copy the URL above into your browser.")
+				fmt.Fprintf(os.Stderr, "2. After authorizing, copy the redirected URL (starting with %s/?code=...)\n", redirectURI)
+				fmt.Fprintln(os.Stderr, "3. Paste the URL here.")
+				fmt.Fprint(os.Stderr, "Paste redirected URL here: ")
 			}
 		}
 
@@ -181,7 +180,7 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 			input := scanner.Text()
 			code, err := parsePastedAuthInput(input)
 			if err != nil {
-				fmt.Printf("Error: %v. Please try again: ", err)
+				fmt.Fprintf(os.Stderr, "Error: %v. Please try again: ", err)
 				continue
 			}
 			stdinCodeChan <- code
@@ -202,50 +201,49 @@ func PerformOAuthLogin(ctx context.Context, host, port, clientID string, ssl boo
 	case code = <-stdinCodeChan:
 		// Succeeded via copy-paste fallback
 	}
-		// Exchange code for token
-		apiHost := host
-		if port != "" {
-			apiHost = host + ":" + port
-		}
-		tokenURL := fmt.Sprintf("%s://%s/api/token", scheme, apiHost)
+	// Exchange code for token
+	apiHost := host
+	if port != "" {
+		apiHost = host + ":" + port
+	}
+	tokenURL := fmt.Sprintf("%s://%s/api/token", scheme, apiHost)
 
-		body := map[string]string{
-			"grant_type":    "authorization_code",
-			"client_id":     clientID,
-			"redirect_uri":  redirectURI,
-			"code":          code,
-			"code_verifier": verifier,
-		}
-		bodyBytes, _ := json.Marshal(body)
+	body := map[string]string{
+		"grant_type":    "authorization_code",
+		"client_id":     clientID,
+		"redirect_uri":  redirectURI,
+		"code":          code,
+		"code_verifier": verifier,
+	}
+	bodyBytes, _ := json.Marshal(body)
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(bodyBytes))
-		if err != nil {
-			return "", "", time.Time{}, fmt.Errorf("create token request failed: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", UserAgent)
-		applyHeaders(req.Header, headers)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("create token request failed: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", UserAgent)
+	applyHeaders(req.Header, headers)
 
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return "", "", time.Time{}, fmt.Errorf("token request failed: %w", err)
-		}
-		defer func() { _ = resp.Body.Close() }()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("token request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
 
-		if resp.StatusCode != http.StatusOK {
-			bodyStr, _ := io.ReadAll(resp.Body)
-			return "", "", time.Time{}, fmt.Errorf("token request returned status %d: %s", resp.StatusCode, string(bodyStr))
-		}
+	if resp.StatusCode != http.StatusOK {
+		bodyStr, _ := io.ReadAll(resp.Body)
+		return "", "", time.Time{}, fmt.Errorf("token request returned status %d: %s", resp.StatusCode, string(bodyStr))
+	}
 
-		var tokResp tokenResponse
-		if err := json.NewDecoder(resp.Body).Decode(&tokResp); err != nil {
-			return "", "", time.Time{}, fmt.Errorf("failed to decode token response: %w", err)
-		}
+	var tokResp tokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokResp); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("failed to decode token response: %w", err)
+	}
 
-		expiration := time.Now().Add(time.Duration(tokResp.ExpiresIn) * time.Second)
-		return tokResp.AccessToken, tokResp.RefreshToken, expiration, nil
+	expiration := time.Now().Add(time.Duration(tokResp.ExpiresIn) * time.Second)
+	return tokResp.AccessToken, tokResp.RefreshToken, expiration, nil
 }
-
 
 // RefreshOAuthToken performs explicit OAuth2 refresh token grant to get a new short-lived access token.
 func RefreshOAuthToken(ctx context.Context, host, port, clientID, refreshToken string, ssl bool, headers ...Header) (string, string, time.Time, error) {
@@ -331,5 +329,3 @@ func parsePastedAuthInput(input string) (string, error) {
 
 	return "", fmt.Errorf("could not parse input as a redirect URL or authorization code")
 }
-
-
