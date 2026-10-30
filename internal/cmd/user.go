@@ -18,13 +18,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/looker-open-source/looker-cli/internal/util"
 	"github.com/spf13/cobra"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
-	"github.com/looker-open-source/looker-cli/internal/util"
 )
 
 var (
@@ -146,10 +147,11 @@ var userCatCmd = &cobra.Command{
 
 		outBytes, _ := json.MarshalIndent(dataMap, "", "  ")
 		if userCatDir != "" {
-			var id int64
-			if v, ok := dataMap["id"].(float64); ok {
-				id = int64(v)
+			id := idToStr(dataMap["id"])
+			if id == "" {
+				id = userID
 			}
+			id = sanitizeFilename(id)
 			firstName := ""
 			if v, ok := dataMap["first_name"].(string); ok {
 				firstName = sanitizeFilename(v)
@@ -158,7 +160,7 @@ var userCatCmd = &cobra.Command{
 			if v, ok := dataMap["last_name"].(string); ok {
 				lastName = sanitizeFilename(v)
 			}
-			fn := fmt.Sprintf("%s/User_%d_%s_%s.json", userCatDir, id, firstName, lastName)
+			fn := filepath.Join(userCatDir, fmt.Sprintf("User_%s_%s_%s.json", id, firstName, lastName))
 			err = os.WriteFile(fn, outBytes, 0644)
 			if err != nil {
 				return fmt.Errorf("failed to write file %s: %w", fn, err)

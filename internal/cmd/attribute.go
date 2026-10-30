@@ -18,12 +18,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
-	"github.com/spf13/cobra"
 	"github.com/looker-open-source/looker-cli/internal/client"
-	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/looker-open-source/looker-cli/internal/util"
+	"github.com/spf13/cobra"
+	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 )
 
 var (
@@ -112,8 +113,10 @@ var attributeCatCmd = &cobra.Command{
 
 		bytes, _ := json.MarshalIndent(attr, "", "  ")
 		if attributeCatDir != "" {
-			fn := fmt.Sprintf("%s/Attribute_%s_%s.json", attributeCatDir, aID, attr.Name)
-			_ = os.WriteFile(fn, bytes, 0644)
+			fn := filepath.Join(attributeCatDir, fmt.Sprintf("Attribute_%s_%s.json", aID, sanitizeFilename(attr.Name)))
+			if err := os.WriteFile(fn, bytes, 0644); err != nil {
+				return fmt.Errorf("failed to write file %s: %w", fn, err)
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(string(bytes))
@@ -167,7 +170,15 @@ var attributeSetGroupValueCmd = &cobra.Command{
 		body := v4.UserAttributeGroupValue{Value: &val}
 		res, err := c.SDK.UpdateUserAttributeGroupValue(gID, aID, body, nil)
 		if err != nil { return err }
-		fmt.Printf("Group attribute %s set to %s\n", *res.Id, *res.Value)
+		resID := aID
+		if res.Id != nil {
+			resID = *res.Id
+		}
+		displayVal := "<hidden>"
+		if res.Value != nil {
+			displayVal = *res.Value
+		}
+		fmt.Printf("Group attribute %s set to %s\n", resID, displayVal)
 		return nil
 	},
 }
@@ -219,10 +230,13 @@ var attributeCreateCmd = &cobra.Command{
 		if len(args) > 1 { label = args[1] }
 
 		var existingAttr *v4.UserAttribute
-		attrs, _ := c.SDK.AllUserAttributes(v4.RequestAllUserAttributes{Fields: ptr("id,name,label,is_system")}, nil)
-		for _, a := range attrs {
-			if a.Name == name || a.Label == label {
-				existingAttr = &a
+		attrs, err := c.SDK.AllUserAttributes(v4.RequestAllUserAttributes{Fields: ptr("id,name,label,is_system")}, nil)
+		if err != nil {
+			return fmt.Errorf("failed to list user attributes: %w", err)
+		}
+		for i := range attrs {
+			if attrs[i].Name == name {
+				existingAttr = &attrs[i]
 				break
 			}
 		}
@@ -247,6 +261,9 @@ var attributeCreateCmd = &cobra.Command{
 			if !attributeCreateForce {
 				return fmt.Errorf("attribute %s already exists. Use --force to modify", name)
 			}
+			if existingAttr.Id == nil {
+				return fmt.Errorf("existing attribute %s has no id", name)
+			}
 			aID := *existingAttr.Id
 			updated, err := c.SDK.UpdateUserAttribute(aID, wua, "", nil)
 			if err != nil { return err }
@@ -257,10 +274,11 @@ var attributeCreateCmd = &cobra.Command{
 			resultAttr = &created
 		}
 
+		resID := getStringValue(resultAttr.Id)
 		if attributeCreatePlain {
-			fmt.Println(*resultAttr.Id)
+			fmt.Println(resID)
 		} else {
-			fmt.Printf("Attribute %s (%s) created/modified.\n", *resultAttr.Id, resultAttr.Name)
+			fmt.Printf("Attribute %s (%s) created/modified.\n", resID, resultAttr.Name)
 		}
 		return nil
 	},
@@ -282,13 +300,18 @@ var attributeImportCmd = &cobra.Command{
 		if err := json.Unmarshal(b, &m); err != nil { return err }
 
 		name, _ := m["name"].(string)
-		label, _ := m["label"].(string)
+		if name == "" {
+			return fmt.Errorf("attribute file missing name")
+		}
 
 		var existingAttr *v4.UserAttribute
-		attrs, _ := c.SDK.AllUserAttributes(v4.RequestAllUserAttributes{Fields: ptr("id,name,label,is_system")}, nil)
-		for _, a := range attrs {
-			if a.Name == name || a.Label == label {
-				existingAttr = &a
+		attrs, err := c.SDK.AllUserAttributes(v4.RequestAllUserAttributes{Fields: ptr("id,name,label,is_system")}, nil)
+		if err != nil {
+			return fmt.Errorf("failed to list user attributes: %w", err)
+		}
+		for i := range attrs {
+			if attrs[i].Name == name {
+				existingAttr = &attrs[i]
 				break
 			}
 		}
@@ -306,6 +329,9 @@ var attributeImportCmd = &cobra.Command{
 			if !attributeImportForce {
 				return fmt.Errorf("attribute %s already exists. Use --force to modify", name)
 			}
+			if existingAttr.Id == nil {
+				return fmt.Errorf("existing attribute %s has no id", name)
+			}
 			aID := *existingAttr.Id
 			updated, err := c.SDK.UpdateUserAttribute(aID, wua, "", nil)
 			if err != nil { return err }
@@ -316,10 +342,11 @@ var attributeImportCmd = &cobra.Command{
 			resultAttr = &created
 		}
 
+		resID := getStringValue(resultAttr.Id)
 		if attributeImportPlain {
-			fmt.Println(*resultAttr.Id)
+			fmt.Println(resID)
 		} else {
-			fmt.Printf("Imported attribute %s (%s)\n", *resultAttr.Id, resultAttr.Name)
+			fmt.Printf("Imported attribute %s (%s)\n", resID, resultAttr.Name)
 		}
 		return nil
 	},
