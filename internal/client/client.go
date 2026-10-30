@@ -24,10 +24,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/looker-open-source/sdk-codegen/go/rtl"
-	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"github.com/looker-open-source/looker-cli/internal/config"
 	"github.com/looker-open-source/looker-cli/internal/util"
+	"github.com/looker-open-source/sdk-codegen/go/rtl"
+	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
 	"golang.org/x/oauth2"
 )
 
@@ -123,9 +123,10 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 	var prof config.Profile
 	if activeProfile != "" {
 		cfg, err := config.Load()
-		if err == nil {
-			prof = cfg.Profiles[activeProfile]
+		if err != nil {
+			return nil, fmt.Errorf("failed to load config for profile %q: %w", activeProfile, err)
 		}
+		prof = cfg.Profiles[activeProfile]
 	}
 
 	if token != "" {
@@ -146,10 +147,16 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 			refreshExpired = true
 			prof.RefreshToken = ""
 			prof.RefreshExpiration = ""
-			if cfg, err := config.Load(); err == nil {
-				cfg.Profiles[activeProfile] = prof
-				_ = cfg.Save()
-			}
+			_ = config.UpdateIfChanged(true, func(cfg *config.Config) (bool, error) {
+				p, ok := cfg.Profiles[activeProfile]
+				if !ok || (p.RefreshToken == "" && p.RefreshExpiration == "") {
+					return false, nil
+				}
+				p.RefreshToken = ""
+				p.RefreshExpiration = ""
+				cfg.Profiles[activeProfile] = p
+				return true, nil
+			})
 		}
 
 		if expired && prof.RefreshToken != "" {
@@ -159,15 +166,24 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 			}
 			tok, refTok, newExp, err := RefreshOAuthToken(ctx, host, port, cID, prof.RefreshToken, ssl, parsedHeaders...)
 			if err == nil {
-				if refTok != prof.RefreshToken || prof.RefreshExpiration == "" {
-					prof.RefreshExpiration = time.Now().Add(RefreshTokenDuration).Format(TimeFormat)
+				refExp := prof.RefreshExpiration
+				if refTok != prof.RefreshToken || refExp == "" {
+					refExp = time.Now().Add(RefreshTokenDuration).Format(TimeFormat)
 				}
 				prof.AccessToken = tok
 				prof.RefreshToken = refTok
 				prof.Expiration = newExp.Format(TimeFormat)
-				if cfg, err := config.Load(); err == nil {
-					cfg.Profiles[activeProfile] = prof
-					_ = cfg.Save()
+				prof.RefreshExpiration = refExp
+				if storeErr := config.Update(func(cfg *config.Config) error {
+					p := cfg.Profiles[activeProfile]
+					p.AccessToken = tok
+					p.RefreshToken = refTok
+					p.Expiration = prof.Expiration
+					p.RefreshExpiration = refExp
+					cfg.Profiles[activeProfile] = p
+					return nil
+				}); storeErr != nil {
+					return nil, fmt.Errorf("failed to store refreshed token in profile %q: %w", activeProfile, storeErr)
 				}
 				activeToken = tok
 				tokenFromStorage = true
@@ -209,7 +225,7 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 			entry, err = GetTokenEntry(host, "")
 		}
 		if err != nil {
-			return nil, fmt.Errorf("auth required: no valid token found in file for host %s (%v)", host, err)
+			return nil, fmt.Errorf("auth required: no valid token found in file for host %s (%w)", host, err)
 		}
 
 		exp, err := time.Parse(TimeFormat, entry.Expiration)
@@ -234,7 +250,9 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 			}
 			tok, refTok, newExp, err := RefreshOAuthToken(ctx, host, port, cID, entry.RefreshToken, ssl, parsedHeaders...)
 			if err == nil {
-				_ = StoreToken(host, tokenUser, tok, refTok, cID, newExp)
+				if storeErr := StoreToken(host, tokenUser, tok, refTok, cID, newExp); storeErr != nil {
+					return nil, fmt.Errorf("failed to store refreshed token: %w", storeErr)
+				}
 				activeToken = tok
 				tokenFromStorage = true
 			} else {
@@ -297,7 +315,7 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 		activeToken = tok
 		tokenFromStorage = true
 		if activeProfile != "" {
-			if cfg, err := config.Load(); err == nil {
+			if err := config.Update(func(cfg *config.Config) error {
 				p := cfg.Profiles[activeProfile]
 				p.AccessToken = tok
 				p.RefreshToken = refTok
@@ -308,12 +326,16 @@ func NewClient(ctx context.Context, host, port, clientID, clientSecret, token, s
 					p.RefreshExpiration = ""
 				}
 				cfg.Profiles[activeProfile] = p
-				_ = cfg.Save()
+				return nil
+			}); err != nil {
+				return nil, fmt.Errorf("failed to store oauth token in profile %q: %w", activeProfile, err)
 			}
 		} else {
 			// The OAuth token belongs to the caller, never to the su target,
 			// so it always goes in the default slot.
-			_ = StoreToken(host, "", tok, refTok, cID, exp)
+			if err := StoreToken(host, "", tok, refTok, cID, exp); err != nil {
+				return nil, fmt.Errorf("failed to store oauth token: %w", err)
+			}
 		}
 		if !strings.HasPrefix(activeToken, "Bearer ") && !strings.HasPrefix(activeToken, "token ") {
 			activeToken = "Bearer " + activeToken
@@ -492,18 +514,21 @@ func ClearProfileToken(activeProfile string) {
 	if activeProfile == "" {
 		return
 	}
-	if cfg, err := config.Load(); err == nil && cfg != nil {
-		if prof, ok := cfg.Profiles[activeProfile]; ok {
-			if prof.AccessToken != "" || prof.RefreshToken != "" || prof.Expiration != "" || prof.RefreshExpiration != "" {
-				prof.AccessToken = ""
-				prof.RefreshToken = ""
-				prof.Expiration = ""
-				prof.RefreshExpiration = ""
-				cfg.Profiles[activeProfile] = prof
-				_ = cfg.Save()
-			}
+	_ = config.UpdateIfChanged(true, func(cfg *config.Config) (bool, error) {
+		prof, ok := cfg.Profiles[activeProfile]
+		if !ok {
+			return false, nil
 		}
-	}
+		if prof.AccessToken == "" && prof.RefreshToken == "" && prof.Expiration == "" && prof.RefreshExpiration == "" {
+			return false, nil
+		}
+		prof.AccessToken = ""
+		prof.RefreshToken = ""
+		prof.Expiration = ""
+		prof.RefreshExpiration = ""
+		cfg.Profiles[activeProfile] = prof
+		return true, nil
+	})
 }
 
 // ExplicitLogin performs explicit API login to get token details for 'session login'.

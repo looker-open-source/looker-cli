@@ -18,11 +18,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/config"
 	"github.com/looker-open-source/looker-cli/internal/util"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -82,14 +82,13 @@ var sessionLoginCmd = &cobra.Command{
 		}
 
 		if c.ActiveProfile != "" {
-			cfg, err := config.Load()
-			if err == nil {
+			err = config.Update(func(cfg *config.Config) error {
 				prof := cfg.Profiles[c.ActiveProfile]
 				prof.AccessToken = tok
 				prof.Expiration = exp.Format(client.TimeFormat)
 				cfg.Profiles[c.ActiveProfile] = prof
-				err = cfg.Save()
-			}
+				return nil
+			})
 			if err != nil {
 				return fmt.Errorf("failed to store token in profile: %w", err)
 			}

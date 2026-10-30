@@ -16,6 +16,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -57,14 +58,7 @@ func ConfigPath() (string, error) {
 	return filepath.Join(home, ".config", "looker-cli", "config.yaml"), nil
 }
 
-// Load loads the config from the config file.
-// If the file does not exist, it returns an empty Config.
-func Load() (*Config, error) {
-	path, err := ConfigPath()
-	if err != nil {
-		return nil, err
-	}
-
+func loadUnlocked(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -77,7 +71,7 @@ func Load() (*Config, error) {
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 	}
 
 	if cfg.Profiles == nil {
@@ -92,21 +86,10 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
-// Save saves the config to the config file.
-func (c *Config) Save() error {
+func saveUnlocked(path string, c *Config) error {
 	for name, prof := range c.Profiles {
 		prof.Host = util.CleanHost(prof.Host)
 		c.Profiles[name] = prof
-	}
-
-	path, err := ConfigPath()
-	if err != nil {
-		return err
-	}
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
 	}
 
 	data, err := yaml.Marshal(c)
@@ -114,5 +97,75 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0600)
+	return util.WriteFileAtomic0600(path, data)
+}
+
+// Load loads the config from the config file.
+// If the file does not exist, it returns an empty Config.
+func Load() (*Config, error) {
+	path, err := ConfigPath()
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg *Config
+	err = util.WithFileRLock(path, func() error {
+		var lErr error
+		cfg, lErr = loadUnlocked(path)
+		return lErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// Save saves the config to the config file atomically under an exclusive file lock.
+func (c *Config) Save() error {
+	path, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+
+	return util.WithFileLock(path, func() error {
+		return saveUnlocked(path, c)
+	})
+}
+
+// Update performs an atomic locked read-modify-write on the config file.
+func Update(fn func(*Config) error) error {
+	return UpdateIfChanged(false, func(cfg *Config) (bool, error) {
+		if err := fn(cfg); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+}
+
+// UpdateIfChanged performs a locked read-modify-write on the config file,
+// writing back only when fn reports changed == true and err == nil.
+func UpdateIfChanged(skipIfMissing bool, fn func(*Config) (bool, error)) error {
+	path, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	if skipIfMissing {
+		if _, sErr := os.Stat(path); errors.Is(sErr, os.ErrNotExist) {
+			if _, lErr := os.Stat(path + ".lock"); errors.Is(lErr, os.ErrNotExist) {
+				return nil
+			}
+		}
+	}
+
+	return util.WithFileLock(path, func() error {
+		cfg, err := loadUnlocked(path)
+		if err != nil {
+			return err
+		}
+		changed, err := fn(cfg)
+		if err != nil || !changed {
+			return err
+		}
+		return saveUnlocked(path, cfg)
+	})
 }
