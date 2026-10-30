@@ -22,8 +22,8 @@ import (
 	"strings"
 
 	"github.com/looker-open-source/looker-cli/internal/util"
-	"github.com/spf13/cobra"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -53,13 +53,17 @@ var roleLsCmd = &cobra.Command{
 	Short: "Display all roles",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		req := v4.RequestAllRoles{
 			Fields: &roleLsFields,
 		}
 		roles, err := c.SDK.AllRoles(req, nil)
-		if err != nil { return fmt.Errorf("failed to list roles: %w", err) }
+		if err != nil {
+			return fmt.Errorf("failed to list roles: %w", err)
+		}
 
 		headers := util.ParseFieldsForHeaders(roleLsFields)
 
@@ -78,7 +82,9 @@ var roleCatCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		rID := args[0]
 		req := v4.RequestSearchRoles{
 			Id: &rID,
@@ -87,7 +93,9 @@ var roleCatCmd = &cobra.Command{
 			req.Fields = &roleCatFields
 		}
 		roles, err := c.SDK.SearchRoles(req, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		if len(roles) == 0 {
 			return fmt.Errorf("role %s not found", rID)
 		}
@@ -104,7 +112,9 @@ var roleCatCmd = &cobra.Command{
 				"model_set_id":      true,
 			}
 			for k := range m {
-				if !keep[k] { delete(m, k) }
+				if !keep[k] {
+					delete(m, k)
+				}
 			}
 			if role.PermissionSet != nil && role.PermissionSet.Id != nil {
 				m["permission_set_id"] = *role.PermissionSet.Id
@@ -117,7 +127,9 @@ var roleCatCmd = &cobra.Command{
 		outBytes, _ := json.MarshalIndent(m, "", "  ")
 		if roleCatDir != "" {
 			name := ""
-			if role.Name != nil { name = sanitizeFilename(*role.Name) }
+			if role.Name != nil {
+				name = sanitizeFilename(*role.Name)
+			}
 			fn := filepath.Join(roleCatDir, fmt.Sprintf("Role_%s_%s.json", sanitizeFilename(rID), name))
 			if err := os.WriteFile(fn, outBytes, 0644); err != nil {
 				return fmt.Errorf("failed to write file %s: %w", fn, err)
@@ -136,10 +148,14 @@ var roleRmCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		rID := args[0]
 		_, err = c.SDK.DeleteRole(rID, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		fmt.Printf("Role %s deleted.\n", rID)
 		return nil
 	},
@@ -151,7 +167,9 @@ var roleCreateCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		name := args[0]
 		pSet := args[1]
 		mSet := args[2]
@@ -162,7 +180,9 @@ var roleCreateCmd = &cobra.Command{
 			ModelSetId:      &mSet,
 		}
 		role, err := c.SDK.CreateRole(wr, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		resID := getStringValue(role.Id)
 		if roleCreatePlain {
@@ -190,13 +210,19 @@ var roleGroupLsCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		rID := args[0]
 		groups, err := c.SDK.RoleGroups(rID, roleGroupLsFields, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		headers := strings.Split(roleGroupLsFields, ",")
-		for i := range headers { headers[i] = strings.TrimSpace(headers[i]) }
+		for i := range headers {
+			headers[i] = strings.TrimSpace(headers[i])
+		}
 
 		table := util.NewTable(headers)
 		for _, g := range groups {
@@ -213,7 +239,9 @@ var roleUserLsCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		rID := args[0]
 
 		directOnly := !roleUserLsAll
@@ -223,10 +251,14 @@ var roleUserLsCmd = &cobra.Command{
 			DirectAssociationOnly: &directOnly,
 		}
 		users, err := c.SDK.RoleUsers(req, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		headers := strings.Split(roleUserLsFields, ",")
-		for i := range headers { headers[i] = strings.TrimSpace(headers[i]) }
+		for i := range headers {
+			headers[i] = strings.TrimSpace(headers[i])
+		}
 
 		table := util.NewTable(headers)
 		for _, u := range users {
@@ -243,26 +275,36 @@ var roleGroupAddCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		rID := args[0]
 		newGroups := args[1:]
 
 		existing, err := c.SDK.RoleGroups(rID, "id", nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		groupMap := make(map[string]bool)
 		for _, g := range existing {
-			if g.Id != nil { groupMap[*g.Id] = true }
+			if g.Id != nil {
+				groupMap[*g.Id] = true
+			}
 		}
 		for _, g := range newGroups {
 			groupMap[g] = true
 		}
 
 		combined := make([]string, 0, len(groupMap))
-		for g := range groupMap { combined = append(combined, g) }
+		for g := range groupMap {
+			combined = append(combined, g)
+		}
 
 		_, err = c.SDK.SetRoleGroups(rID, combined, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		fmt.Printf("Groups added to role %s.\n", rID)
 		return nil
 	},
@@ -274,15 +316,21 @@ var roleGroupRmCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		rID := args[0]
 		rmGroups := args[1:]
 
 		existing, err := c.SDK.RoleGroups(rID, "id", nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		rmMap := make(map[string]bool)
-		for _, g := range rmGroups { rmMap[g] = true }
+		for _, g := range rmGroups {
+			rmMap[g] = true
+		}
 
 		remaining := make([]string, 0)
 		for _, g := range existing {
@@ -292,7 +340,9 @@ var roleGroupRmCmd = &cobra.Command{
 		}
 
 		_, err = c.SDK.SetRoleGroups(rID, remaining, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		fmt.Printf("Groups removed from role %s.\n", rID)
 		return nil
 	},
@@ -304,12 +354,16 @@ var roleUserAddCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		rID := args[0]
 		newUsers := args[1:]
 
 		existing, err := c.SDK.RoleUsers(v4.RequestRoleUsers{RoleId: rID, Fields: ptr("id"), DirectAssociationOnly: ptrBool(true)}, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		userMap := make(map[string]bool)
 		for _, u := range existing {
@@ -322,10 +376,14 @@ var roleUserAddCmd = &cobra.Command{
 		}
 
 		combined := make([]string, 0, len(userMap))
-		for u := range userMap { combined = append(combined, u) }
+		for u := range userMap {
+			combined = append(combined, u)
+		}
 
 		_, err = c.SDK.SetRoleUsers(rID, combined, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		fmt.Printf("Users added to role %s.\n", rID)
 		return nil
 	},
@@ -337,15 +395,21 @@ var roleUserRmCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := initClient(cmd.Context(), false)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		rID := args[0]
 		rmUsers := args[1:]
 
 		existing, err := c.SDK.RoleUsers(v4.RequestRoleUsers{RoleId: rID, Fields: ptr("id"), DirectAssociationOnly: ptrBool(true)}, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 
 		rmMap := make(map[string]bool)
-		for _, u := range rmUsers { rmMap[u] = true }
+		for _, u := range rmUsers {
+			rmMap[u] = true
+		}
 
 		remaining := make([]string, 0)
 		for _, u := range existing {
@@ -355,7 +419,9 @@ var roleUserRmCmd = &cobra.Command{
 		}
 
 		_, err = c.SDK.SetRoleUsers(rID, remaining, nil)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		fmt.Printf("Users removed from role %s.\n", rID)
 		return nil
 	},
