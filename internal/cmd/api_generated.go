@@ -14689,6 +14689,46 @@ func init() {
 	apiWorkspaceCmd.AddCommand(apiWorkspaceWorkspaceCmd)
 }
 
+func buildAPICallURL(baseURL, pathTemplate string, pathParams, pathValues []string, requiredQuery, optionalQuery map[string]string) (string, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid base URL: %w", err)
+	}
+
+	unescapedPath := pathTemplate
+	escapedPath := pathTemplate
+	if len(pathParams) > 0 {
+		rawPairs := make([]string, 0, len(pathParams)*2)
+		escPairs := make([]string, 0, len(pathParams)*2)
+		for i, paramName := range pathParams {
+			placeholder := "{" + paramName + "}"
+			val := pathValues[i]
+			rawPairs = append(rawPairs, placeholder, val)
+			escPairs = append(escPairs, placeholder, url.PathEscape(val))
+		}
+		unescapedPath = strings.NewReplacer(rawPairs...).Replace(pathTemplate)
+		escapedPath = strings.NewReplacer(escPairs...).Replace(pathTemplate)
+	}
+
+	basePath := strings.TrimRight(u.Path, "/")
+	baseRawPath := strings.TrimRight(u.EscapedPath(), "/")
+	u.Path = basePath + "/api/4.0" + unescapedPath
+	u.RawPath = baseRawPath + "/api/4.0" + escapedPath
+
+	q := u.Query()
+	// Set required query params
+	for k, v := range requiredQuery {
+		q.Set(k, v)
+	}
+	// Set optional query params from flags
+	for k, v := range optionalQuery {
+		q.Set(k, v)
+	}
+	u.RawQuery = q.Encode()
+
+	return u.String(), nil
+}
+
 func executeApiCallGeneric(cmd *cobra.Command, method, pathTemplate string, pathParams, requiredQueryParams []string, bodyParam string, queryParams map[string]string, args []string) error {
 	ctx := cmd.Context()
 	c, err := initClient(ctx, false)
@@ -14696,17 +14736,16 @@ func executeApiCallGeneric(cmd *cobra.Command, method, pathTemplate string, path
 		return err
 	}
 
-	actualPath := pathTemplate
 	argIdx := 0
 
-	// 1. Replace path parameters
+	// 1. Collect path parameter values
+	pathValues := make([]string, 0, len(pathParams))
 	for _, paramName := range pathParams {
 		if argIdx >= len(args) {
 			return fmt.Errorf("missing required path parameter: %s", paramName)
 		}
-		val := args[argIdx]
+		pathValues = append(pathValues, args[argIdx])
 		argIdx++
-		actualPath = strings.ReplaceAll(actualPath, "{"+paramName+"}", url.PathEscape(val))
 	}
 
 	// 2. Parse required query parameters
@@ -14741,26 +14780,14 @@ func executeApiCallGeneric(cmd *cobra.Command, method, pathTemplate string, path
 		bodyReader = bytes.NewReader(bodyBytes)
 	}
 
-	// 4. Construct URL
-	u, err := url.Parse(c.Session.Config.BaseUrl)
+	// 4. Construct URL without double-encoding path parameters or clobbering BaseUrl path prefixes
+	reqURL, err := buildAPICallURL(c.Session.Config.BaseUrl, pathTemplate, pathParams, pathValues, qParams, queryParams)
 	if err != nil {
-		return fmt.Errorf("invalid base URL: %w", err)
+		return err
 	}
-	u.Path = "/api/4.0" + actualPath
-
-	q := u.Query()
-	// Set required query params
-	for k, v := range qParams {
-		q.Set(k, v)
-	}
-	// Set optional query params from flags
-	for k, v := range queryParams {
-		q.Set(k, v)
-	}
-	u.RawQuery = q.Encode()
 
 	// 5. Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -14773,7 +14800,7 @@ func executeApiCallGeneric(cmd *cobra.Command, method, pathTemplate string, path
 	}
 
 	if cfgDebug {
-		logDebugRequest(cmd.ErrOrStderr(), method, u.String(), req.Header, bodyBytes)
+		logDebugRequest(cmd.ErrOrStderr(), method, reqURL, req.Header, bodyBytes)
 	}
 
 	// 6. Execute request
