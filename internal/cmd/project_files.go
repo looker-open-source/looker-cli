@@ -16,15 +16,18 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
-	"github.com/spf13/cobra"
+	"github.com/looker-open-source/looker-cli/internal/client"
 	"github.com/looker-open-source/looker-cli/internal/util"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -78,6 +81,39 @@ var projectFileLsCmd = &cobra.Command{
 	},
 }
 
+func buildProjectAPIURL(baseURL, projectID, suffix string, query url.Values) (string, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid base URL: %w", err)
+	}
+	basePath := strings.TrimRight(u.Path, "/")
+	baseRawPath := strings.TrimRight(u.EscapedPath(), "/")
+	u.Path = basePath + "/api/4.0/projects/" + projectID + suffix
+	u.RawPath = baseRawPath + "/api/4.0/projects/" + url.PathEscape(projectID) + suffix
+	if len(query) > 0 {
+		u.RawQuery = query.Encode()
+	}
+	return u.String(), nil
+}
+
+func newProjectAPIRequest(ctx context.Context, c *client.ClientWrapper, method, projectID, suffix string, query url.Values, body io.Reader) (*http.Request, error) {
+	reqURL, err := buildProjectAPIURL(c.Session.Config.BaseUrl, projectID, suffix, query)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	for k, v := range c.Session.Config.Headers {
+		req.Header.Set(k, v)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req, nil
+}
+
 var projectFileCatCmd = &cobra.Command{
 	Use:   "cat [PROJECT_ID] [FILE_PATH]",
 	Short: "Show contents of a project file",
@@ -91,21 +127,11 @@ var projectFileCatCmd = &cobra.Command{
 		projectID := args[0]
 		filePath := args[1]
 
-		u, err := url.Parse(c.Session.Config.BaseUrl)
-		if err != nil {
-			return fmt.Errorf("invalid base URL: %w", err)
-		}
-		u.Path = "/api/4.0/projects/" + url.PathEscape(projectID) + "/file/content"
-		q := u.Query()
+		q := url.Values{}
 		q.Set("file_path", filePath)
-		u.RawQuery = q.Encode()
-
-		req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+		req, err := newProjectAPIRequest(ctx, c, http.MethodGet, projectID, "/file/content", q, nil)
 		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
-		}
-		for k, v := range c.Session.Config.Headers {
-			req.Header.Set(k, v)
+			return err
 		}
 
 		resp, err := c.Session.Client.Do(req)
@@ -160,18 +186,11 @@ var projectFileRmCmd = &cobra.Command{
 		projectID := args[0]
 		filePath := args[1]
 
-		u, err := url.Parse(c.Session.Config.BaseUrl)
-		if err != nil {
-			return fmt.Errorf("invalid base URL: %w", err)
-		}
-		u.Path = "/api/4.0/projects/" + url.PathEscape(projectID) + "/files"
-		q := u.Query()
+		q := url.Values{}
 		q.Set("file_path", filePath)
-		u.RawQuery = q.Encode()
-
-		req, err := http.NewRequestWithContext(ctx, "DELETE", u.String(), nil)
+		req, err := newProjectAPIRequest(ctx, c, http.MethodDelete, projectID, "/files", q, nil)
 		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
+			return err
 		}
 
 		resp, err := c.Session.Client.Do(req)
@@ -202,15 +221,9 @@ var projectDirectoryLsCmd = &cobra.Command{
 		}
 		projectID := args[0]
 
-		u, err := url.Parse(c.Session.Config.BaseUrl)
+		req, err := newProjectAPIRequest(ctx, c, http.MethodGet, projectID, "/directories", nil, nil)
 		if err != nil {
-			return fmt.Errorf("invalid base URL: %w", err)
-		}
-		u.Path = "/api/4.0/projects/" + url.PathEscape(projectID) + "/directories"
-
-		req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
-		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
+			return err
 		}
 
 		resp, err := c.Session.Client.Do(req)
@@ -260,19 +273,15 @@ var projectDirectoryCreateCmd = &cobra.Command{
 		payload := map[string]string{
 			"path": dirPath,
 		}
-		payloadBytes, _ := json.Marshal(payload)
-
-		u, err := url.Parse(c.Session.Config.BaseUrl)
+		payloadBytes, err := json.Marshal(payload)
 		if err != nil {
-			return fmt.Errorf("invalid base URL: %w", err)
+			return fmt.Errorf("failed to encode payload: %w", err)
 		}
-		u.Path = "/api/4.0/projects/" + url.PathEscape(projectID) + "/directories"
 
-		req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(payloadBytes))
+		req, err := newProjectAPIRequest(ctx, c, http.MethodPost, projectID, "/directories", nil, bytes.NewReader(payloadBytes))
 		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
+			return err
 		}
-		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := c.Session.Client.Do(req)
 		if err != nil {
@@ -304,18 +313,11 @@ var projectDirectoryRmCmd = &cobra.Command{
 		projectID := args[0]
 		dirPath := args[1]
 
-		u, err := url.Parse(c.Session.Config.BaseUrl)
-		if err != nil {
-			return fmt.Errorf("invalid base URL: %w", err)
-		}
-		u.Path = "/api/4.0/projects/" + url.PathEscape(projectID) + "/directories"
-		q := u.Query()
+		q := url.Values{}
 		q.Set("path", dirPath)
-		u.RawQuery = q.Encode()
-
-		req, err := http.NewRequestWithContext(ctx, "DELETE", u.String(), nil)
+		req, err := newProjectAPIRequest(ctx, c, http.MethodDelete, projectID, "/directories", q, nil)
 		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
+			return err
 		}
 
 		resp, err := c.Session.Client.Do(req)
@@ -358,19 +360,15 @@ func writeProjectFileGeneric(cmd *cobra.Command, method string, args []string) e
 		"path":    filePath,
 		"content": string(bodyBytes),
 	}
-	payloadBytes, _ := json.Marshal(payload)
-
-	u, err := url.Parse(c.Session.Config.BaseUrl)
+	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("invalid base URL: %w", err)
+		return fmt.Errorf("failed to encode payload: %w", err)
 	}
-	u.Path = "/api/4.0/projects/" + url.PathEscape(projectID) + "/files"
 
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(payloadBytes))
+	req, err := newProjectAPIRequest(ctx, c, method, projectID, "/files", nil, bytes.NewReader(payloadBytes))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.Session.Client.Do(req)
 	if err != nil {
@@ -378,9 +376,12 @@ func writeProjectFileGeneric(cmd *cobra.Command, method string, args []string) e
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	bodyBytes, _ = io.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("failed to write file (status %s): %s", resp.Status, string(bodyBytes))
+		return fmt.Errorf("failed to write file (status %s): %s", resp.Status, string(respBytes))
 	}
 
 	action := "Created"

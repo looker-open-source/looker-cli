@@ -18,11 +18,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/looker-open-source/looker-cli/internal/util"
 	"github.com/spf13/cobra"
 	v4 "github.com/looker-open-source/sdk-codegen/go/sdk/v4"
-	"github.com/looker-open-source/looker-cli/internal/util"
 )
 
 var (
@@ -116,9 +117,11 @@ var roleCatCmd = &cobra.Command{
 		outBytes, _ := json.MarshalIndent(m, "", "  ")
 		if roleCatDir != "" {
 			name := ""
-			if role.Name != nil { name = *role.Name }
-			fn := fmt.Sprintf("%s/Role_%s_%s.json", roleCatDir, rID, name)
-			_ = os.WriteFile(fn, outBytes, 0644)
+			if role.Name != nil { name = sanitizeFilename(*role.Name) }
+			fn := filepath.Join(roleCatDir, fmt.Sprintf("Role_%s_%s.json", sanitizeFilename(rID), name))
+			if err := os.WriteFile(fn, outBytes, 0644); err != nil {
+				return fmt.Errorf("failed to write file %s: %w", fn, err)
+			}
 			fmt.Printf("Wrote %s\n", fn)
 		} else {
 			fmt.Println(string(outBytes))
@@ -161,10 +164,11 @@ var roleCreateCmd = &cobra.Command{
 		role, err := c.SDK.CreateRole(wr, nil)
 		if err != nil { return err }
 
+		resID := getStringValue(role.Id)
 		if roleCreatePlain {
-			fmt.Println(*role.Id)
+			fmt.Println(resID)
 		} else {
-			fmt.Printf("Role %s (%s) created.\n", *role.Id, *role.Name)
+			fmt.Printf("Role %s (%s) created.\n", resID, getStringValue(role.Name))
 		}
 		return nil
 	},
@@ -254,7 +258,7 @@ var roleGroupAddCmd = &cobra.Command{
 			groupMap[g] = true
 		}
 
-		var combined []string
+		combined := make([]string, 0, len(groupMap))
 		for g := range groupMap { combined = append(combined, g) }
 
 		_, err = c.SDK.SetRoleGroups(rID, combined, nil)
@@ -280,7 +284,7 @@ var roleGroupRmCmd = &cobra.Command{
 		rmMap := make(map[string]bool)
 		for _, g := range rmGroups { rmMap[g] = true }
 
-		var remaining []string
+		remaining := make([]string, 0)
 		for _, g := range existing {
 			if g.Id != nil && !rmMap[*g.Id] {
 				remaining = append(remaining, *g.Id)
@@ -317,7 +321,7 @@ var roleUserAddCmd = &cobra.Command{
 			userMap[u] = true
 		}
 
-		var combined []string
+		combined := make([]string, 0, len(userMap))
 		for u := range userMap { combined = append(combined, u) }
 
 		_, err = c.SDK.SetRoleUsers(rID, combined, nil)
@@ -343,7 +347,7 @@ var roleUserRmCmd = &cobra.Command{
 		rmMap := make(map[string]bool)
 		for _, u := range rmUsers { rmMap[u] = true }
 
-		var remaining []string
+		remaining := make([]string, 0)
 		for _, u := range existing {
 			if u.Id != nil && !rmMap[*u.Id] {
 				remaining = append(remaining, *u.Id)
