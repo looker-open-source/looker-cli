@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.1](https://github.com/looker-open-source/looker-cli/compare/v1.2.0...v1.2.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **auth:** atomic locked credential storage and Windows token-file support ([#337](https://github.com/looker-open-source/looker-cli/issues/337)) ([1ce7171](https://github.com/looker-open-source/looker-cli/commit/1ce717157fecb1d035641e58bf38253682a995e2))
+* **client,cmd:** wire timeout/proxy/verify-ssl, harden OAuth state, and drop dead --force ([#339](https://github.com/looker-open-source/looker-cli/issues/339)) ([0272e06](https://github.com/looker-open-source/looker-cli/commit/0272e0607847e0b2a119ee422abddd67aa7f47d8))
+* **cmd:** check write/update errors, separate stderr, and fail on partial errors ([#338](https://github.com/looker-open-source/looker-cli/issues/338)) ([85f4c91](https://github.com/looker-open-source/looker-cli/commit/85f4c91001d4c271314ef2e2d4942a485fdaca43))
+* **cmd:** fix project URL encoding, attribute panics/overwrites, user export ID, and role member removal ([#336](https://github.com/looker-open-source/looker-cli/issues/336)) ([eab0053](https://github.com/looker-open-source/looker-cli/commit/eab0053516eba06d8d8a26db351937a833afb23f))
+* **cmd:** prevent double-encoding path params and preserve base URL path in api commands ([#340](https://github.com/looker-open-source/looker-cli/issues/340)) ([6eee3f3](https://github.com/looker-open-source/looker-cli/commit/6eee3f336562d8488c83209e527f7ce7c5827b3f))
+* prevent su bypass, debug credential leak, and data loss in mv/import --force ([#333](https://github.com/looker-open-source/looker-cli/issues/333)) ([4d78c97](https://github.com/looker-open-source/looker-cli/commit/4d78c97acb9fd3eca916f524aeca16f8e9dafda1))
+
 ## [1.2.0](https://github.com/looker-open-source/looker-cli/compare/v1.1.1...v1.2.0) (2026-10-27)
 
 
