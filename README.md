@@ -758,9 +758,10 @@ Commands pertaining to spaces (now known as Folders in Looker). *Supports alias:
     ```bash
     ./looker-cli space tree 1 --token-file
     ```
-*   **`export <space_id>`**: Recursively download all looks, dashboards, and folders inside a space to your local filesystem.
+*   **`export <space_id>`**: Recursively download all looks, dashboards, and folders inside a space to your local filesystem. Use `--exclude` (comma-separated or repeated) to skip specific subfolder IDs.
     ```bash
     ./looker-cli space export 5 --token-file
+    ./looker-cli space export 5 --exclude 12,15 --token-file
     ```
 *   **`rm <space_id>`**: Delete a folder.
     ```bash

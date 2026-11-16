@@ -239,6 +239,7 @@ func TestFolderExport_ArchivesAndErrorPropagation(t *testing.T) {
 		folderExportTar = ""
 		folderExportTgz = ""
 		folderExportTrim = false
+		folderExportExclude = nil
 	}
 	t.Cleanup(func() {
 		MockSDK = nil
