@@ -932,6 +932,9 @@ var dashboardImportCmd = &cobra.Command{
 															if err == nil && cq.Id != nil {
 																sq["query_id"] = cq.Id
 																delete(sq, "query")
+																// The slug belongs to the source instance; Looker
+																// finds the source query by its new query_id.
+																delete(sq, "query_slug")
 																sourceQueries[sqIdx] = sq
 															} else {
 																problems.addf("%s: failed to create merge source query %d: %v", elemLabel, sqIdx, err)
@@ -948,11 +951,37 @@ var dashboardImportCmd = &cobra.Command{
 											_ = json.Unmarshal(mb, &wmq)
 											cmq, err := c.SDK.CreateMergeQuery(wmq, "", nil)
 											if err == nil && cmq.Id != nil {
+												// Looker accepts a vis tile only with a look_id,
+												// query_id, extension_id or result_maker_id, so
+												// merge_result_id on its own fails with a 422.
+												// CreateMergeQuery returns the result maker that
+												// runs the new merge query.
 												wde.MergeResultId = cmq.Id
-												wde.ResultMaker = nil
-											} else if err != nil {
+												wde.ResultMakerId = cmq.ResultMakerId
+												if wde.ResultMaker != nil {
+													// Keep the tile's filter listeners and vis
+													// config, pointed at the new merge query.
+													wde.ResultMaker.MergeResultId = cmq.Id
+													wde.ResultMaker.SqlQueryId = nil
+													wde.ResultMaker.Query = nil
+												}
+											} else {
+												if err == nil {
+													err = fmt.Errorf("server returned no id")
+												}
 												problems.addf("%s: failed to create its merge query: %v", elemLabel, err)
+												// Without its merge query the tile would be
+												// rejected, or bound to whatever has the old
+												// merge query id on this instance.
+												continue
 											}
+										} else if ref := mergeResultRef(elemMap); ref != "" {
+											// Before v1.2.0, `space export` wrote merged-results
+											// tiles without their merge_result definition, and
+											// the merge query id in the file belongs to the
+											// source instance, so there is nothing to rebuild.
+											problems.addf("%s: uses merged results, but the file has no merge_result definition to rebuild them from (merge query %s is from the source instance); re-export the dashboard with looker-cli v1.2.0 or later", elemLabel, ref)
+											continue
 										}
 									}
 
@@ -1243,6 +1272,18 @@ var dashboardSyncLookmlCmd = &cobra.Command{
 		fmt.Printf("Synced dashboards %v\n", ids)
 		return nil
 	},
+}
+
+// mergeResultRef returns the id of the merge query that a dashboard element
+// from an import file runs, or "" if the element doesn't use merged results.
+func mergeResultRef(em map[string]interface{}) string {
+	if id := idToStr(em["merge_result_id"]); id != "" {
+		return id
+	}
+	if rm, ok := em["result_maker"].(map[string]interface{}); ok {
+		return idToStr(rm["merge_result_id"])
+	}
+	return ""
 }
 
 func idToStr(val interface{}) string {
