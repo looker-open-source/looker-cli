@@ -35,21 +35,22 @@ import (
 )
 
 var (
-	folderLsFields   string
-	folderLsPlain    bool
-	folderLsCSV      bool
-	folderTopFields  string
-	folderTopPlain   bool
-	folderTopCSV     bool
-	folderTreePlain  bool
-	folderCatFields  string
-	folderCatDir     string
-	folderExportDir  string
-	folderExportTar  string
-	folderExportTgz  string
-	folderExportZip  string
-	folderExportTrim bool
-	folderRmForce    bool
+	folderLsFields      string
+	folderLsPlain       bool
+	folderLsCSV         bool
+	folderTopFields     string
+	folderTopPlain      bool
+	folderTopCSV        bool
+	folderTreePlain     bool
+	folderCatFields     string
+	folderCatDir        string
+	folderExportDir     string
+	folderExportTar     string
+	folderExportTgz     string
+	folderExportZip     string
+	folderExportTrim    bool
+	folderExportExclude []string
+	folderRmForce       bool
 )
 
 var FolderCmd = &cobra.Command{
@@ -470,16 +471,34 @@ var folderCreateCmd = &cobra.Command{
 	},
 }
 
+func buildFolderExcludeSet(raw []string) map[string]bool {
+	excluded := make(map[string]bool)
+	for _, entry := range raw {
+		for _, part := range strings.Split(entry, ",") {
+			id := strings.TrimSpace(part)
+			if id != "" {
+				excluded[id] = true
+			}
+		}
+	}
+	return excluded
+}
+
 var folderExportCmd = &cobra.Command{
 	Use:   "export [FOLDER_ID]",
 	Short: "export a folder and its subfolders, looks, and dashboards",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		fID := args[0]
+		excluded := buildFolderExcludeSet(folderExportExclude)
+		if excluded[strings.TrimSpace(fID)] {
+			return fmt.Errorf("cannot exclude root folder %s", fID)
+		}
+
 		c, err := initClient(cmd.Context(), false)
 		if err != nil {
 			return err
 		}
-		fID := args[0]
 
 		if folderExportTar != "" || folderExportTgz != "" || folderExportZip != "" {
 			var buf bytes.Buffer
@@ -497,7 +516,7 @@ var folderExportCmd = &cobra.Command{
 				archiver = tar.NewWriter(w)
 			}
 
-			err = exportFolderArchive(c, fID, archiver, "")
+			err = exportFolderArchive(c, fID, archiver, "", excluded)
 			if err != nil {
 				return err
 			}
@@ -536,14 +555,17 @@ var folderExportCmd = &cobra.Command{
 		if outDir == "" {
 			outDir = "."
 		}
-		return exportFolderDir(c, fID, outDir)
+		return exportFolderDir(c, fID, outDir, excluded)
 	},
 }
 
-func exportFolderDir(c *client.ClientWrapper, fID, baseDir string) error {
+func exportFolderDir(c *client.ClientWrapper, fID, baseDir string, excluded map[string]bool) error {
 	folder, err := c.SDK.Folder(fID, "", nil)
 	if err != nil {
 		return fmt.Errorf("failed to get folder %s: %w", fID, err)
+	}
+	if folder.Id != nil && excluded[*folder.Id] {
+		return fmt.Errorf("cannot exclude root folder %s", *folder.Id)
 	}
 	name := folder.Name
 	cleanName := sanitizeFilename(name)
@@ -612,7 +634,10 @@ func exportFolderDir(c *client.ClientWrapper, fID, baseDir string) error {
 	}
 	for _, ch := range children {
 		if ch.Id != nil {
-			if err := exportFolderDir(c, *ch.Id, dirName); err != nil {
+			if excluded[*ch.Id] {
+				continue
+			}
+			if err := exportFolderDir(c, *ch.Id, dirName, excluded); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -620,10 +645,13 @@ func exportFolderDir(c *client.ClientWrapper, fID, baseDir string) error {
 	return errors.Join(errs...)
 }
 
-func exportFolderArchive(c *client.ClientWrapper, fID string, archiver interface{}, pathPrefix string) error {
+func exportFolderArchive(c *client.ClientWrapper, fID string, archiver interface{}, pathPrefix string, excluded map[string]bool) error {
 	folder, err := c.SDK.Folder(fID, "", nil)
 	if err != nil {
 		return fmt.Errorf("failed to get folder %s: %w", fID, err)
+	}
+	if folder.Id != nil && excluded[*folder.Id] {
+		return fmt.Errorf("cannot exclude root folder %s", *folder.Id)
 	}
 	name := folder.Name
 	cleanName := sanitizeFilename(name)
@@ -696,7 +724,10 @@ func exportFolderArchive(c *client.ClientWrapper, fID string, archiver interface
 	}
 	for _, ch := range children {
 		if ch.Id != nil {
-			if err := exportFolderArchive(c, *ch.Id, archiver, dirName); err != nil {
+			if excluded[*ch.Id] {
+				continue
+			}
+			if err := exportFolderArchive(c, *ch.Id, archiver, dirName, excluded); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -763,6 +794,7 @@ func init() {
 	folderExportCmd.Flags().StringVar(&folderExportTgz, "tgz", "", "Targz file to store folder tree")
 	folderExportCmd.Flags().StringVar(&folderExportZip, "zip", "", "Zip file to store folder tree")
 	folderExportCmd.Flags().BoolVar(&folderExportTrim, "trim", false, "Trim output to minimal set of fields")
+	folderExportCmd.Flags().StringSliceVar(&folderExportExclude, "exclude", nil, "Subfolder IDs to exclude from export (comma-separated or repeated)")
 }
 
 func sanitizeFilename(name string) string {
