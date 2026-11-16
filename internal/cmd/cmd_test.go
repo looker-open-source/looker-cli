@@ -294,6 +294,14 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 					Id:            ptr("elem_1"),
 					MergeResultId: ptr("merge_123"),
 				},
+				{
+					Id:            ptr("elem_2"),
+					ResultMakerId: ptr("rm_merge_123"),
+					ResultMaker: &v4.ResultMakerWithIdVisConfigAndDynamicFields{
+						Id:            ptr("rm_merge_123"),
+						MergeResultId: ptr("merge_123"),
+					},
+				},
 			},
 		}
 		b, _ := json.Marshal(dash)
@@ -2346,29 +2354,31 @@ func TestDashboardCatCommand(t *testing.T) {
 	}
 
 	elements, ok := m["dashboard_elements"].([]interface{})
-	if !ok || len(elements) == 0 {
-		t.Fatalf("No dashboard elements found in output: %s", out)
+	if !ok || len(elements) != 2 {
+		t.Fatalf("expected 2 dashboard elements in output, got %d: %s", len(elements), out)
 	}
 
-	elem := elements[0].(map[string]interface{})
-	mergeResult, ok := elem["merge_result"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("merge_result missing from dashboard element: %s", out)
-	}
+	for idx, rawElem := range elements {
+		elem := rawElem.(map[string]interface{})
+		mergeResult, ok := elem["merge_result"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("element %d: merge_result missing from dashboard element: %s", idx, out)
+		}
 
-	sourceQueries, ok := mergeResult["source_queries"].([]interface{})
-	if !ok || len(sourceQueries) == 0 {
-		t.Fatalf("source_queries missing or empty in merge_result: %s", out)
-	}
+		sourceQueries, ok := mergeResult["source_queries"].([]interface{})
+		if !ok || len(sourceQueries) == 0 {
+			t.Fatalf("element %d: source_queries missing or empty in merge_result: %s", idx, out)
+		}
 
-	sq := sourceQueries[0].(map[string]interface{})
-	query, ok := sq["query"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("query definition missing from source query: %s", out)
-	}
+		sq := sourceQueries[0].(map[string]interface{})
+		query, ok := sq["query"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("element %d: query definition missing from source query: %s", idx, out)
+		}
 
-	if query["model"] != "test_model" || query["view"] != "test_view" {
-		t.Errorf("Unexpected query definition: %v", query)
+		if query["model"] != "test_model" || query["view"] != "test_view" {
+			t.Errorf("element %d: unexpected query definition: %v", idx, query)
+		}
 	}
 }
 
@@ -2561,6 +2571,14 @@ func TestDashboardImportWithMergeQueryCommand(t *testing.T) {
 	fb, _ := json.Marshal(ce.ResultMaker.Filterables)
 	if !strings.Contains(string(fb), `"dashboard_filter_name":"Region"`) {
 		t.Errorf("expected result_maker.filterables to keep the Region listener, got %s", fb)
+	}
+	wireElem, _ := json.Marshal(ce)
+	var wireMap map[string]interface{}
+	_ = json.Unmarshal(wireElem, &wireMap)
+	if rmMap, ok := wireMap["result_maker"].(map[string]interface{}); !ok {
+		t.Fatalf("expected serialized element to include result_maker, got %s", wireElem)
+	} else if _, hasOldID := rmMap["id"]; hasOldID {
+		t.Errorf("expected result_maker.id to be omitted on write, got %s", wireElem)
 	}
 }
 
