@@ -167,11 +167,12 @@ func (m *statefulMockDoer) Do(result interface{}, method, ver, path string, reqP
 }
 
 type mockDoer struct {
-	t               *testing.T
-	folder801Looks  []v4.LookWithQuery
-	elementsCreated int
-	createdElements []v4.WriteDashboardElement
-	createdQueries  []v4.WriteQuery
+	t                   *testing.T
+	folder801Looks      []v4.LookWithQuery
+	elementsCreated     int
+	createdElements     []v4.WriteDashboardElement
+	createdQueries      []v4.WriteQuery
+	createdMergeQueries []v4.WriteMergeQuery
 }
 
 func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[string]interface{}, body interface{}, options *rtl.ApiSettings) error {
@@ -293,6 +294,14 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 					Id:            ptr("elem_1"),
 					MergeResultId: ptr("merge_123"),
 				},
+				{
+					Id:            ptr("elem_2"),
+					ResultMakerId: ptr("rm_merge_123"),
+					ResultMaker: &v4.ResultMakerWithIdVisConfigAndDynamicFields{
+						Id:            ptr("rm_merge_123"),
+						MergeResultId: ptr("merge_123"),
+					},
+				},
 			},
 		}
 		b, _ := json.Marshal(dash)
@@ -402,6 +411,7 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 		bodyBytes, _ := json.Marshal(body)
 		var wmq v4.WriteMergeQuery
 		_ = json.Unmarshal(bodyBytes, &wmq)
+		m.createdMergeQueries = append(m.createdMergeQueries, wmq)
 		if wmq.SourceQueries != nil && len(*wmq.SourceQueries) > 0 {
 			sq := (*wmq.SourceQueries)[0]
 			if sq.QueryId != nil && *sq.QueryId != "new_query_456" {
@@ -411,7 +421,8 @@ func (m *mockDoer) Do(result interface{}, method, ver, path string, reqPars map[
 			m.t.Errorf("Expected source_queries to be present in WriteMergeQuery")
 		}
 		mq := v4.MergeQuery{
-			Id: ptr("new_merge_123"),
+			Id:            ptr("new_merge_123"),
+			ResultMakerId: ptr("new_rm_789"),
 		}
 		b, _ := json.Marshal(mq)
 		return json.Unmarshal(b, result)
@@ -2343,29 +2354,31 @@ func TestDashboardCatCommand(t *testing.T) {
 	}
 
 	elements, ok := m["dashboard_elements"].([]interface{})
-	if !ok || len(elements) == 0 {
-		t.Fatalf("No dashboard elements found in output: %s", out)
+	if !ok || len(elements) != 2 {
+		t.Fatalf("expected 2 dashboard elements in output, got %d: %s", len(elements), out)
 	}
 
-	elem := elements[0].(map[string]interface{})
-	mergeResult, ok := elem["merge_result"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("merge_result missing from dashboard element: %s", out)
-	}
+	for idx, rawElem := range elements {
+		elem := rawElem.(map[string]interface{})
+		mergeResult, ok := elem["merge_result"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("element %d: merge_result missing from dashboard element: %s", idx, out)
+		}
 
-	sourceQueries, ok := mergeResult["source_queries"].([]interface{})
-	if !ok || len(sourceQueries) == 0 {
-		t.Fatalf("source_queries missing or empty in merge_result: %s", out)
-	}
+		sourceQueries, ok := mergeResult["source_queries"].([]interface{})
+		if !ok || len(sourceQueries) == 0 {
+			t.Fatalf("element %d: source_queries missing or empty in merge_result: %s", idx, out)
+		}
 
-	sq := sourceQueries[0].(map[string]interface{})
-	query, ok := sq["query"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("query definition missing from source query: %s", out)
-	}
+		sq := sourceQueries[0].(map[string]interface{})
+		query, ok := sq["query"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("element %d: query definition missing from source query: %s", idx, out)
+		}
 
-	if query["model"] != "test_model" || query["view"] != "test_view" {
-		t.Errorf("Unexpected query definition: %v", query)
+		if query["model"] != "test_model" || query["view"] != "test_view" {
+			t.Errorf("element %d: unexpected query definition: %v", idx, query)
+		}
 	}
 }
 
@@ -2451,10 +2464,25 @@ func TestDashboardImportWithMergeQueryCommand(t *testing.T) {
       "title": "Merge Element",
       "type": "vis",
       "merge_result_id": "old_merge_123",
+      "result_maker_id": "old_rm_123",
+      "result_maker": {
+        "id": "old_rm_123",
+        "merge_result_id": "old_merge_123",
+        "vis_config": {"type": "looker_column"},
+        "filterables": [
+          {
+            "name": "source_query_1",
+            "model": "test_model",
+            "view": "test_view",
+            "listen": [{"dashboard_filter_name": "Region", "field": "test_view.region"}]
+          }
+        ]
+      },
       "merge_result": {
         "source_queries": [
           {
             "query_id": "old_query_456",
+            "query_slug": "old_slug_456",
             "name": "source_query_1",
             "query": {
               "model": "test_model",
@@ -2510,6 +2538,47 @@ func TestDashboardImportWithMergeQueryCommand(t *testing.T) {
 
 	if out != "new_dash_1" {
 		t.Errorf("expected new_dash_1, got %s", out)
+	}
+
+	// Looker rejects a vis tile that only has merge_result_id (#342), so the
+	// element must use the result maker of the merge query created for it,
+	// and its result_maker must point at that merge query.
+	if len(doer.createdMergeQueries) != 1 {
+		t.Fatalf("expected 1 merge query created, got %d", len(doer.createdMergeQueries))
+	}
+	if sqs := doer.createdMergeQueries[0].SourceQueries; sqs == nil || len(*sqs) != 1 || (*sqs)[0].QuerySlug != nil {
+		t.Errorf("expected the source instance's query_slug to be dropped, got %+v", sqs)
+	}
+	if len(doer.createdElements) != 1 {
+		t.Fatalf("expected 1 element created, got %d", len(doer.createdElements))
+	}
+	ce := doer.createdElements[0]
+	if ce.ResultMakerId == nil || *ce.ResultMakerId != "new_rm_789" {
+		t.Errorf("expected element result_maker_id='new_rm_789', got %v", ce.ResultMakerId)
+	}
+	if ce.MergeResultId == nil || *ce.MergeResultId != "new_merge_123" {
+		t.Errorf("expected element merge_result_id='new_merge_123', got %v", ce.MergeResultId)
+	}
+	if ce.ResultMaker == nil {
+		t.Fatalf("expected element result_maker to be preserved, got nil")
+	}
+	if ce.ResultMaker.MergeResultId == nil || *ce.ResultMaker.MergeResultId != "new_merge_123" {
+		t.Errorf("expected result_maker.merge_result_id='new_merge_123', got %v", ce.ResultMaker.MergeResultId)
+	}
+	if ce.ResultMaker.VisConfig == nil || (*ce.ResultMaker.VisConfig)["type"] != "looker_column" {
+		t.Errorf("expected result_maker.vis_config to be preserved, got %v", ce.ResultMaker.VisConfig)
+	}
+	fb, _ := json.Marshal(ce.ResultMaker.Filterables)
+	if !strings.Contains(string(fb), `"dashboard_filter_name":"Region"`) {
+		t.Errorf("expected result_maker.filterables to keep the Region listener, got %s", fb)
+	}
+	wireElem, _ := json.Marshal(ce)
+	var wireMap map[string]interface{}
+	_ = json.Unmarshal(wireElem, &wireMap)
+	if rmMap, ok := wireMap["result_maker"].(map[string]interface{}); !ok {
+		t.Fatalf("expected serialized element to include result_maker, got %s", wireElem)
+	} else if _, hasOldID := rmMap["id"]; hasOldID {
+		t.Errorf("expected result_maker.id to be omitted on write, got %s", wireElem)
 	}
 }
 

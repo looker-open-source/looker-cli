@@ -96,43 +96,40 @@ func CatDashboardHelper(c *client.ClientWrapper, dID string, trim bool, plans bo
 	if elements, ok := m["dashboard_elements"].([]interface{}); ok {
 		for i, ev := range elements {
 			if em, ok := ev.(map[string]interface{}); ok {
-				if mergeResultIDVal, ok := em["merge_result_id"]; ok && mergeResultIDVal != nil {
-					mergeResultID := idToStr(mergeResultIDVal)
-					if mergeResultID != "" {
-						if _, hasMR := em["merge_result"]; !hasMR {
-							mq, err := c.SDK.MergeQuery(mergeResultID, "", nil)
-							if err == nil {
-								mqBytes, _ := json.Marshal(mq)
-								var mqMap map[string]interface{}
-								_ = json.Unmarshal(mqBytes, &mqMap)
+				if mergeResultID := mergeResultRef(em); mergeResultID != "" {
+					if _, hasMR := em["merge_result"]; !hasMR {
+						mq, err := c.SDK.MergeQuery(mergeResultID, "", nil)
+						if err == nil {
+							mqBytes, _ := json.Marshal(mq)
+							var mqMap map[string]interface{}
+							_ = json.Unmarshal(mqBytes, &mqMap)
 
-								if sourceQueries, ok := mqMap["source_queries"].([]interface{}); ok {
-									for j, sqv := range sourceQueries {
-										if sq, ok := sqv.(map[string]interface{}); ok {
-											if qIDVal, ok := sq["query_id"]; ok && qIDVal != nil {
-												qID := idToStr(qIDVal)
-												if qID != "" {
-													q, err := c.SDK.Query(qID, "", nil)
-													if err == nil {
-														qBytes, _ := json.Marshal(q)
-														var qMap map[string]interface{}
-														_ = json.Unmarshal(qBytes, &qMap)
-														sq["query"] = qMap
-														sourceQueries[j] = sq
-													} else {
-														fmt.Fprintf(os.Stderr, "failed to get query %s: %v\n", qID, err)
-													}
+							if sourceQueries, ok := mqMap["source_queries"].([]interface{}); ok {
+								for j, sqv := range sourceQueries {
+									if sq, ok := sqv.(map[string]interface{}); ok {
+										if qIDVal, ok := sq["query_id"]; ok && qIDVal != nil {
+											qID := idToStr(qIDVal)
+											if qID != "" {
+												q, err := c.SDK.Query(qID, "", nil)
+												if err == nil {
+													qBytes, _ := json.Marshal(q)
+													var qMap map[string]interface{}
+													_ = json.Unmarshal(qBytes, &qMap)
+													sq["query"] = qMap
+													sourceQueries[j] = sq
+												} else {
+													fmt.Fprintf(os.Stderr, "failed to get query %s: %v\n", qID, err)
 												}
 											}
 										}
 									}
-									mqMap["source_queries"] = sourceQueries
 								}
-								em["merge_result"] = mqMap
-								elements[i] = em
-							} else {
-								fmt.Fprintf(os.Stderr, "failed to get merge query %s: %v\n", mergeResultID, err)
+								mqMap["source_queries"] = sourceQueries
 							}
+							em["merge_result"] = mqMap
+							elements[i] = em
+						} else {
+							fmt.Fprintf(os.Stderr, "failed to get merge query %s: %v\n", mergeResultID, err)
 						}
 					}
 				}
@@ -903,6 +900,12 @@ var dashboardImportCmd = &cobra.Command{
 												qVal, hasQuery = rmVal["query"].(map[string]interface{})
 											}
 										}
+										mVal, hasMerge := elemMap["merge_result"].(map[string]interface{})
+										if !hasMerge {
+											if rmVal, ok := elemMap["result_maker"].(map[string]interface{}); ok {
+												mVal, hasMerge = rmVal["merge_result"].(map[string]interface{})
+											}
+										}
 
 										if hasQuery {
 											qb, _ := json.Marshal(qVal)
@@ -919,10 +922,13 @@ var dashboardImportCmd = &cobra.Command{
 											} else if err != nil {
 												problems.addf("%s: failed to create its query: %v", elemLabel, err)
 											}
-										} else if mVal, ok := elemMap["merge_result"].(map[string]interface{}); ok {
+										} else if hasMerge {
 											if sourceQueries, ok := mVal["source_queries"].([]interface{}); ok {
 												for sqIdx, sqv := range sourceQueries {
 													if sq, ok := sqv.(map[string]interface{}); ok {
+														// The slug belongs to the source instance; Looker
+														// finds the recreated source query by its new query_id.
+														delete(sq, "query_slug")
 														if qVal, ok := sq["query"].(map[string]interface{}); ok {
 															qb, _ := json.Marshal(qVal)
 															var wq v4.WriteQuery
@@ -948,11 +954,40 @@ var dashboardImportCmd = &cobra.Command{
 											_ = json.Unmarshal(mb, &wmq)
 											cmq, err := c.SDK.CreateMergeQuery(wmq, "", nil)
 											if err == nil && cmq.Id != nil {
+												// Looker accepts a vis tile only with a look_id,
+												// query_id, extension_id or result_maker_id, so
+												// merge_result_id on its own fails with a 422.
+												// CreateMergeQuery returns the result maker that
+												// runs the new merge query.
 												wde.MergeResultId = cmq.Id
-												wde.ResultMaker = nil
-											} else if err != nil {
+												wde.ResultMakerId = cmq.ResultMakerId
+												if wde.ResultMaker != nil {
+													// Keep the tile's filter listeners and vis
+													// config, pointed at the new merge query.
+													// WriteResultMakerWithIdVisConfigAndDynamicFields
+													// omits id and query_id, so unmarshaling into wde
+													// already stripped the source result maker ID.
+													wde.ResultMaker.MergeResultId = cmq.Id
+													wde.ResultMaker.SqlQueryId = nil
+													wde.ResultMaker.Query = nil
+												}
+											} else {
+												if err == nil {
+													err = fmt.Errorf("server returned no id")
+												}
 												problems.addf("%s: failed to create its merge query: %v", elemLabel, err)
+												// Without its merge query the tile would be
+												// rejected, or bound to whatever has the old
+												// merge query id on this instance.
+												continue
 											}
+										} else if ref := mergeResultRef(elemMap); ref != "" {
+											// Before v1.2.0, `space export` wrote merged-results
+											// tiles without their merge_result definition, and
+											// the merge query id in the file belongs to the
+											// source instance, so there is nothing to rebuild.
+											problems.addf("%s: uses merged results, but the file has no merge_result definition to rebuild them from (merge query %s is from the source instance); re-export the dashboard with looker-cli v1.2.0 or later", elemLabel, ref)
+											continue
 										}
 									}
 
@@ -1243,6 +1278,18 @@ var dashboardSyncLookmlCmd = &cobra.Command{
 		fmt.Printf("Synced dashboards %v\n", ids)
 		return nil
 	},
+}
+
+// mergeResultRef returns the id of the merge query that a dashboard element
+// from an import file runs, or "" if the element doesn't use merged results.
+func mergeResultRef(em map[string]interface{}) string {
+	if id := idToStr(em["merge_result_id"]); id != "" {
+		return id
+	}
+	if rm, ok := em["result_maker"].(map[string]interface{}); ok {
+		return idToStr(rm["merge_result_id"])
+	}
+	return ""
 }
 
 func idToStr(val interface{}) string {

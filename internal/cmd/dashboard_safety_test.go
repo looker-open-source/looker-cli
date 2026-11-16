@@ -589,6 +589,56 @@ func TestDashboardImport_UnreferencedElementIsReported(t *testing.T) {
 	}
 }
 
+// Before v1.2.0, `space export` wrote merged-results tiles without their
+// merge_result definition (#342). The merge query id in such a file belongs to
+// the source instance, so the tile is reported instead of being sent to Looker,
+// which would reject it with a 422.
+func TestDashboardImport_MergeTileWithoutDefinitionIsReported(t *testing.T) {
+	m := newContentMockDoer(t)
+	useContentMock(t, m)
+
+	noDefinition := `{
+  "title": "New Dash",
+  "dashboard_elements": [
+    {"id": "1", "title": "Donors", "type": "vis", "merge_result_id": "77", "result_maker": {"merge_result_id": "77"}}
+  ],
+  "dashboard_layouts": [
+    {"active": true, "dashboard_layout_components": [{"dashboard_element_id": "1"}]}
+  ]
+}`
+	_, err := executeCommand("dashboard", "import", writeImportFile(t, noDefinition), "801")
+	if err == nil || !strings.Contains(err.Error(), `element 0 ("Donors"): uses merged results`) || !strings.Contains(err.Error(), "re-export") {
+		t.Fatalf("expected the merged tile without a definition to be reported, got %v", err)
+	}
+	if m.called("POST /dashboard_elements") {
+		t.Errorf("must not create a merged tile that can't be rebuilt")
+	}
+}
+
+func TestDashboardImport_MergeTileIsSkippedWhenItsMergeQueryFails(t *testing.T) {
+	m := newContentMockDoer(t)
+	m.fail["POST /merge_queries"] = fmt.Errorf("response error. status=422 Validation Failed")
+	useContentMock(t, m)
+
+	withDefinition := `{
+  "title": "New Dash",
+  "dashboard_elements": [
+    {"id": "1", "title": "Donors", "type": "vis", "merge_result_id": "77",
+     "merge_result": {"source_queries": [{"name": "q1", "query": {"model": "m", "view": "v", "fields": ["v.count"]}}]}}
+  ],
+  "dashboard_layouts": [
+    {"active": true, "dashboard_layout_components": [{"dashboard_element_id": "1"}]}
+  ]
+}`
+	_, err := executeCommand("dashboard", "import", writeImportFile(t, withDefinition), "801")
+	if err == nil || !strings.Contains(err.Error(), `element 0 ("Donors"): failed to create its merge query`) {
+		t.Fatalf("expected the failed merge query to be reported, got %v", err)
+	}
+	if m.called("POST /dashboard_elements") {
+		t.Errorf("must not create a merged tile whose merge query failed")
+	}
+}
+
 func setIsolatedCacheDir(t *testing.T) {
 	t.Helper()
 	tmp := t.TempDir()
