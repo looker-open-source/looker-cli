@@ -39,7 +39,38 @@ This is a Go-based reimplementation of the original Ruby `gzr` tool, utilizing t
 
 ## Installation
 
-To compile `looker-cli` from source:
+### Download a Prebuilt Binary (Recommended)
+
+Prebuilt static binaries for Linux, macOS, and Windows (`amd64` and `arm64`) are published on the [GitHub Releases](https://github.com/looker-open-source/looker-cli/releases/latest) page.
+
+1. Download the archive for your OS and architecture (`.tar.gz` on macOS/Linux, `.zip` on Windows), along with `checksums.txt`.
+2. *(Optional)* Verify the archive checksum:
+   ```bash
+   # Linux
+   sha256sum --ignore-missing -c checksums.txt
+
+   # macOS
+   shasum -a 256 --ignore-missing -c checksums.txt
+   ```
+3. Extract the archive and move `looker-cli` onto your `PATH`:
+   ```bash
+   tar -xzf looker-cli_*.tar.gz
+   sudo mv looker-cli /usr/local/bin/
+   looker-cli version
+   ```
+
+### Install with `go install`
+
+If you have Go installed (matching the version in `go.mod` or newer):
+
+```bash
+go install github.com/looker-open-source/looker-cli/cmd/looker-cli@latest
+looker-cli version
+```
+
+### Build from Source
+
+To compile `looker-cli` from a local checkout:
 
 ```bash
 # Build the binary in the current workspace

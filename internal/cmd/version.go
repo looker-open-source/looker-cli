@@ -16,19 +16,77 @@ package cmd
 
 import (
 	"fmt"
+	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 // x-release-please-start-version
 const Version = "1.3.0"
+
 // x-release-please-end
+
+// Build metadata injected by GoReleaser ldflags (falls back to Go VCS build info when unset).
+var (
+	Commit = ""
+	Date   = ""
+)
+
+func resolveBuildMetadata() (commit, date string, modified bool) {
+	commit = Commit
+	date = Date
+	if commit != "" {
+		return commit, date, false
+	}
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return commit, date, false
+	}
+
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			if len(setting.Value) > 7 {
+				commit = setting.Value[:7]
+			} else {
+				commit = setting.Value
+			}
+		case "vcs.time":
+			if date == "" {
+				date = setting.Value
+			}
+		case "vcs.modified":
+			modified = setting.Value == "true"
+		}
+	}
+	return commit, date, modified
+}
+
+func formatVersion(version, commit, date string, modified bool) string {
+	var meta []string
+	if commit != "" {
+		if modified {
+			commit += "-dirty"
+		}
+		meta = append(meta, fmt.Sprintf("commit: %s", commit))
+	}
+	if date != "" {
+		meta = append(meta, fmt.Sprintf("built: %s", date))
+	}
+	if len(meta) == 0 {
+		return fmt.Sprintf("looker-cli %s", version)
+	}
+	return fmt.Sprintf("looker-cli %s (%s)", version, strings.Join(meta, ", "))
+}
 
 var VersionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version number of looker-cli",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("looker-cli %s\n", Version)
+		commit, date, modified := resolveBuildMetadata()
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), formatVersion(Version, commit, date, modified))
 	},
 }
 
