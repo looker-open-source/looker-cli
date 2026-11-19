@@ -21,6 +21,40 @@ permissions: {}
 
 jobs:
 
+  lint-and-release-check:
+    name: Lint & Release Dry Run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15
+
+      - name: Check GoReleaser config
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
+        with:
+          version: '~> v2.20'
+          args: check
+
+      - name: Verify cross-platform release build
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
+        with:
+          version: '~> v2.20'
+          args: release --snapshot --clean
+
   test:
     name: Test - Looker.${{ matrix.looker }} / Go.${{ matrix.go-version }}
     runs-on: ubuntu-latest
@@ -60,7 +94,7 @@ jobs:
           MATRIX_LOOKER: ${{ matrix.looker }}
 
       - name: Set up GO ${{ matrix.go-version }}
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -241,7 +275,7 @@ jobs:
           path: artifacts
 
       - name: Publish Test Results
-        uses: EnricoMi/publish-unit-test-result-action@7622c5bf3d112a72ab4fa3951c2aa5723d8ab92d # v2
+        uses: EnricoMi/publish-unit-test-result-action@7622c5bf3d112a72ab4fa3951c2aa5723d8ab92d # v2.25.0
         with:
           # Cosmetic issue with `check_name` being associated to the wrong
           # workflow: https://github.com/EnricoMi/publish-unit-test-result-action/issues/12

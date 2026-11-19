@@ -12,6 +12,10 @@ builds:
       - arm64
     main: ./cmd/looker-cli
     binary: looker-cli
+    ldflags:
+      - -s -w
+      - -X github.com/looker-open-source/looker-cli/internal/cmd.Commit={{.ShortCommit}}
+      - -X github.com/looker-open-source/looker-cli/internal/cmd.Date={{.Date}}
 
 # Disable GoReleaser's changelog since release-please handles it beautifully
 changelog:
@@ -22,6 +26,11 @@ release:
   # By default it is 'keep-existing', but being explicit is safer.
   # You can also use 'append' if you want GoReleaser to add checksums at the bottom.
   mode: keep-existing
+  # Allow manual workflow_dispatch recovery runs to overwrite partially uploaded assets.
+  replace_existing_artifacts: true
+
+checksum:
+  name_template: checksums.txt
 
 archives:
   - formats:

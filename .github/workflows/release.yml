@@ -3,12 +3,23 @@ name: Release Pipeline
 on:
   push:
     branches:
-      - main # Or your default branch
+      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing git tag to (re-)publish assets for (e.g. v1.3.0). Skips release-please.'
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions: {}
 
 jobs:
   release-please:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -28,8 +39,8 @@ jobs:
 
   goreleaser:
     needs: release-please
-    # ONLY run this job if release-please just merged the PR and created a release
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    # Run when release-please creates a release on push, or when manually dispatched for an existing tag.
+    if: ${{ always() && ((github.event_name == 'push' && needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -38,21 +49,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-          # CRITICAL: We must checkout the exact tag created by release-please,
+          # CRITICAL: We must checkout the exact tag created by release-please (or dispatched manually),
           # otherwise GoReleaser will fail to map the build to the correct version.
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release-please.outputs.tag_name }}
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 'stable'
+          go-version-file: go.mod
           cache: false
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
-          version: latest
+          version: '~> v2.20'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

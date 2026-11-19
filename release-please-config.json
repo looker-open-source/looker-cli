@@ -9,9 +9,7 @@
           "type": "generic",
           "path": "internal/cmd/version.go"
         }
-      ],
-      "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true
+      ]
     }
   }
 }
