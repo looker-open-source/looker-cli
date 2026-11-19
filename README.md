@@ -49,8 +49,8 @@ Prebuilt static binaries for Linux, macOS, and Windows (`amd64` and `arm64`) are
    # Linux
    sha256sum --ignore-missing -c checksums.txt
 
-   # macOS
-   shasum -a 256 --ignore-missing -c checksums.txt
+   # macOS (replace <version> and <arch> with the downloaded archive name)
+   grep looker-cli_<version>_darwin_<arch>.tar.gz checksums.txt | shasum -a 256 -c
    ```
 3. Extract the archive and move `looker-cli` onto your `PATH`:
    ```bash

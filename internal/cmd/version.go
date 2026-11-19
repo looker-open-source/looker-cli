@@ -36,9 +36,6 @@ var (
 func resolveBuildMetadata() (commit, date string, modified bool) {
 	commit = Commit
 	date = Date
-	if commit != "" {
-		return commit, date, false
-	}
 
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
@@ -48,10 +45,12 @@ func resolveBuildMetadata() (commit, date string, modified bool) {
 	for _, setting := range info.Settings {
 		switch setting.Key {
 		case "vcs.revision":
-			if len(setting.Value) > 7 {
-				commit = setting.Value[:7]
-			} else {
-				commit = setting.Value
+			if commit == "" {
+				if len(setting.Value) > 7 {
+					commit = setting.Value[:7]
+				} else {
+					commit = setting.Value
+				}
 			}
 		case "vcs.time":
 			if date == "" {
