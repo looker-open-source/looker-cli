@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/looker-open-source/looker-cli/compare/v1.3.0...v1.4.0) (2026-11-20)
+
+
+### Features
+
+* **cmd:** add --exclude subfolder filter to folder export ([#345](https://github.com/looker-open-source/looker-cli/issues/345)) ([5913b83](https://github.com/looker-open-source/looker-cli/commit/5913b83837f43984081f4da6f4778d8602e51b6c)), closes [#267](https://github.com/looker-open-source/looker-cli/issues/267)
+
+
+### Bug Fixes
+
+* bind imported merged-results tiles to their merge query's result maker ([#347](https://github.com/looker-open-source/looker-cli/issues/347)) ([b8a506b](https://github.com/looker-open-source/looker-cli/commit/b8a506bea2d31bbf3e5f90d544f1fdf5bb3b4292)), closes [#342](https://github.com/looker-open-source/looker-cli/issues/342)
+
 ## [1.3.0](https://github.com/looker-open-source/looker-cli/compare/v1.2.1...v1.3.0) (2026-11-12)
 
 
