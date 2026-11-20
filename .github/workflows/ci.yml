@@ -60,7 +60,7 @@ jobs:
           MATRIX_LOOKER: ${{ matrix.looker }}
 
       - name: Set up GO ${{ matrix.go-version }}
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -241,7 +241,7 @@ jobs:
           path: artifacts
 
       - name: Publish Test Results
-        uses: EnricoMi/publish-unit-test-result-action@7622c5bf3d112a72ab4fa3951c2aa5723d8ab92d # v2
+        uses: EnricoMi/publish-unit-test-result-action@7622c5bf3d112a72ab4fa3951c2aa5723d8ab92d # v2.25.0
         with:
           # Cosmetic issue with `check_name` being associated to the wrong
           # workflow: https://github.com/EnricoMi/publish-unit-test-result-action/issues/12
