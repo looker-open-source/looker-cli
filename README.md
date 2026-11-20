@@ -99,7 +99,7 @@ echo "autoload -U compinit; compinit" >> ~/.zshrc
 *   **Persist across new sessions:**
     ```zsh
     # Linux
-    looker-cli completion zsh > "${fpath[1]}/_looker-cli"
+    looker-cli completion zsh | sudo tee "${fpath[1]}/_looker-cli" > /dev/null
 
     # macOS (Homebrew)
     looker-cli completion zsh > "$(brew --prefix)/share/zsh/site-functions/_looker-cli"
@@ -122,7 +122,12 @@ echo "autoload -U compinit; compinit" >> ~/.zshrc
     ```powershell
     looker-cli completion powershell | Out-String | Invoke-Expression
     ```
-*   **Persist across new sessions:** add the command above to your PowerShell profile (`$PROFILE`).
+*   **Persist across new sessions:**
+    ```powershell
+    looker-cli completion powershell > "$HOME\.looker-cli-completion.ps1"
+    # Add the following line to your $PROFILE:
+    . "$HOME\.looker-cli-completion.ps1"
+    ```
 
 Start a new shell for persistent completions to take effect.
 
