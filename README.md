@@ -15,10 +15,11 @@ This is a Go-based reimplementation of the original Ruby `gzr` tool, utilizing t
 
 ## Table of Contents
 1. [Installation](#installation)
-2. [Authentication Guide](#authentication-guide)
-3. [Profile Management](#profile-management)
-4. [Global Flags](#global-flags)
-5. [Complete Command Reference](#complete-command-reference)
+2. [Shell Completions](#shell-completions)
+3. [Authentication Guide](#authentication-guide)
+4. [Profile Management](#profile-management)
+5. [Global Flags](#global-flags)
+6. [Complete Command Reference](#complete-command-reference)
    * [alert](#alert)
    * [attribute](#attribute)
    * [connection](#connection)
@@ -85,6 +86,81 @@ go build -o looker-cli ./cmd/looker-cli
 > ```bash
 > gem uninstall gazer
 > ```
+
+---
+
+## Shell Completions
+
+`looker-cli` can generate autocompletion scripts for `bash`, `zsh`, `fish`, and `powershell` via `looker-cli completion <shell>`. Pass `--no-descriptions` to disable completion descriptions, or run `looker-cli completion <shell> --help` for full details.
+
+### Bash
+
+Requires the `bash-completion` package (installable via your OS package manager).
+
+*   **Current shell session:**
+    ```bash
+    source <(looker-cli completion bash)
+    ```
+*   **Persist across new sessions:**
+    ```bash
+    # Linux (per-user, no sudo required)
+    mkdir -p ~/.local/share/bash-completion/completions
+    looker-cli completion bash > ~/.local/share/bash-completion/completions/looker-cli
+
+    # Linux (system-wide)
+    looker-cli completion bash | sudo tee /etc/bash_completion.d/looker-cli > /dev/null
+
+    # macOS (Homebrew)
+    looker-cli completion bash > "$(brew --prefix)/etc/bash_completion.d/looker-cli"
+    ```
+    *(Alternatively, add `source <(looker-cli completion bash)` to your `~/.bashrc`.)*
+
+### Zsh
+
+If shell completion is not already enabled in your environment, enable it once:
+
+```zsh
+echo "autoload -U compinit; compinit" >> ~/.zshrc
+```
+
+*   **Current shell session:**
+    ```zsh
+    source <(looker-cli completion zsh)
+    ```
+*   **Persist across new sessions:**
+    ```zsh
+    # Linux
+    looker-cli completion zsh | sudo tee "${fpath[1]}/_looker-cli" > /dev/null
+
+    # macOS (Homebrew)
+    looker-cli completion zsh > "$(brew --prefix)/share/zsh/site-functions/_looker-cli"
+    ```
+
+### Fish
+
+*   **Current shell session:**
+    ```fish
+    looker-cli completion fish | source
+    ```
+*   **Persist across new sessions:**
+    ```fish
+    looker-cli completion fish > ~/.config/fish/completions/looker-cli.fish
+    ```
+
+### PowerShell
+
+*   **Current shell session:**
+    ```powershell
+    looker-cli completion powershell | Out-String | Invoke-Expression
+    ```
+*   **Persist across new sessions:**
+    ```powershell
+    looker-cli completion powershell > "$HOME\.looker-cli-completion.ps1"
+    # Add the following line to your $PROFILE:
+    . "$HOME\.looker-cli-completion.ps1"
+    ```
+
+Start a new shell for persistent completions to take effect.
 
 ---
 
