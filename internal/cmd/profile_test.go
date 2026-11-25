@@ -412,6 +412,11 @@ func TestInitClient_Profile(t *testing.T) {
 func TestSessionLogout_DeletesTokens(t *testing.T) {
 	tmpDir := setupTempConfig(t)
 	defer teardownTempConfig(t, tmpDir)
+	resetRootFlags(t, "host", "profile", "su", "token-file")
+	defer func() {
+		RootCmd.SetArgs(nil)
+		resetRootFlags(t, "host", "profile", "su", "token-file")
+	}()
 
 	origHome := os.Getenv("HOME")
 	defer func() { _ = os.Setenv("HOME", origHome) }()
