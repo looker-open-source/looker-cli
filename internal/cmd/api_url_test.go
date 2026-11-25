@@ -135,6 +135,11 @@ func TestExecuteApiCallGeneric_WireRequestSingleEncoded(t *testing.T) {
 	os.Stdout = wOut
 	defer func() { os.Stdout = oldStdout }()
 
+	defer func() {
+		RootCmd.SetArgs(nil)
+		resetRootFlags(t, "host", "port", "ssl", "token")
+	}()
+
 	RootCmd.SetArgs([]string{
 		"api", "project", "project_file",
 		"org/my project",

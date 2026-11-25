@@ -70,6 +70,10 @@ func executeCommand(args ...string) (string, error) {
 func TestProfileCommands(t *testing.T) {
 	tmpDir := setupTempConfig(t)
 	defer teardownTempConfig(t, tmpDir)
+	defer func() {
+		RootCmd.SetArgs(nil)
+		resetRootFlags(t, "ssl")
+	}()
 
 	// 1. List profiles (empty)
 	out, err := executeCommand("profile", "ls")
@@ -509,6 +513,8 @@ func TestProfileCommands_CleanHost(t *testing.T) {
 func TestInitClient_CleanHost(t *testing.T) {
 	tmpDir := setupTempConfig(t)
 	defer teardownTempConfig(t, tmpDir)
+	resetRootFlags(t, "ssl")
+	defer resetRootFlags(t, "ssl")
 
 	origBaseURL, hasBaseURL := os.LookupEnv("LOOKERSDK_BASE_URL")
 	_ = os.Unsetenv("LOOKERSDK_BASE_URL")
