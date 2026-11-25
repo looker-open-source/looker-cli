@@ -29,15 +29,14 @@ func runCmdWithStdoutRedirect(args []string) (string, error) {
 	// Reset them before and after each run so --noun/--output from one test
 	// cannot leak into the next.
 	resetMetaFlags := func() {
-		metaTreeNoun = ""
-		metaTreeOutput = ""
-		metaSearchOut = ""
 		for _, name := range []string{"noun", "output"} {
 			if f := metaTreeCmd.Flags().Lookup(name); f != nil {
+				_ = f.Value.Set(f.DefValue)
 				f.Changed = false
 			}
 		}
 		if f := metaSearchCmd.Flags().Lookup("output"); f != nil {
+			_ = f.Value.Set(f.DefValue)
 			f.Changed = false
 		}
 	}
