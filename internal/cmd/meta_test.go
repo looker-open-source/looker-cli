@@ -24,6 +24,26 @@ import (
 )
 
 func runCmdWithStdoutRedirect(args []string) (string, error) {
+	// The meta flags are bound to package-level variables on the shared
+	// RootCmd, and pflag does not restore defaults between Execute() calls.
+	// Reset them before and after each run so --noun/--output from one test
+	// cannot leak into the next.
+	resetMetaFlags := func() {
+		for _, name := range []string{"noun", "output"} {
+			if f := metaTreeCmd.Flags().Lookup(name); f != nil {
+				_ = f.Value.Set(f.DefValue)
+				f.Changed = false
+			}
+		}
+		if f := metaSearchCmd.Flags().Lookup("output"); f != nil {
+			_ = f.Value.Set(f.DefValue)
+			f.Changed = false
+		}
+	}
+	resetMetaFlags()
+	defer resetMetaFlags()
+	defer RootCmd.SetArgs(nil)
+
 	oldStdout := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w

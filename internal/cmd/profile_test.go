@@ -67,9 +67,28 @@ func executeCommand(args ...string) (string, error) {
 	return buf.String(), err
 }
 
+func resetProfileAddFlags(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"host", "port", "client-id", "client-secret", "token", "refresh-token"} {
+		f := profileAddCmd.Flags().Lookup(name)
+		if f == nil {
+			t.Fatalf("unknown profile add flag %q", name)
+		}
+		if err := f.Value.Set(f.DefValue); err != nil {
+			t.Fatalf("failed to reset profile add flag %q: %v", name, err)
+		}
+		f.Changed = false
+	}
+}
+
 func TestProfileCommands(t *testing.T) {
 	tmpDir := setupTempConfig(t)
 	defer teardownTempConfig(t, tmpDir)
+	defer func() {
+		RootCmd.SetArgs(nil)
+		resetRootFlags(t, "ssl")
+		resetProfileAddFlags(t)
+	}()
 
 	// 1. List profiles (empty)
 	out, err := executeCommand("profile", "ls")
@@ -393,6 +412,11 @@ func TestInitClient_Profile(t *testing.T) {
 func TestSessionLogout_DeletesTokens(t *testing.T) {
 	tmpDir := setupTempConfig(t)
 	defer teardownTempConfig(t, tmpDir)
+	resetRootFlags(t, "host", "profile", "su", "token-file")
+	defer func() {
+		RootCmd.SetArgs(nil)
+		resetRootFlags(t, "host", "profile", "su", "token-file")
+	}()
 
 	origHome := os.Getenv("HOME")
 	defer func() { _ = os.Setenv("HOME", origHome) }()
@@ -453,6 +477,10 @@ func TestSessionLogout_DeletesTokens(t *testing.T) {
 func TestProfileCommands_CleanHost(t *testing.T) {
 	tmpDir := setupTempConfig(t)
 	defer teardownTempConfig(t, tmpDir)
+	defer func() {
+		RootCmd.SetArgs(nil)
+		resetProfileAddFlags(t)
+	}()
 
 	// Add profile with https:// and trailing slash
 	out, err := executeCommand("profile", "add", "prof-https", "--host", "https://test-https.looker.com/", "--port", "19999")
@@ -509,6 +537,8 @@ func TestProfileCommands_CleanHost(t *testing.T) {
 func TestInitClient_CleanHost(t *testing.T) {
 	tmpDir := setupTempConfig(t)
 	defer teardownTempConfig(t, tmpDir)
+	resetRootFlags(t, "ssl")
+	defer resetRootFlags(t, "ssl")
 
 	origBaseURL, hasBaseURL := os.LookupEnv("LOOKERSDK_BASE_URL")
 	_ = os.Unsetenv("LOOKERSDK_BASE_URL")

@@ -1526,18 +1526,10 @@ func TestInitClient_EnvVars(t *testing.T) {
 		_ = os.Setenv("HOME", origHome)
 	}()
 
-	// Reset flags to their default values
-	_ = RootCmd.PersistentFlags().Set("host", "localhost")
-	_ = RootCmd.PersistentFlags().Set("port", "19999")
-	_ = RootCmd.PersistentFlags().Set("verify-ssl", "true")
-
-	// Reset flag "changed" statuses to false by creating a fresh Command instance or modifying manually
-	// Cobra doesn't let us easily reset "Changed" without clearing flags, but we can check the behavior
-	// by parsing a clean argument list or just executing in isolation.
-	// Let's make sure they are considered UNCHANGED. We can do this by resetting the Command state.
-	RootCmd.PersistentFlags().Lookup("host").Changed = false
-	RootCmd.PersistentFlags().Lookup("port").Changed = false
-	RootCmd.PersistentFlags().Lookup("verify-ssl").Changed = false
+	// Reset flags to their default values before and after the test so
+	// explicit flags set in subtests cannot leak into subsequent tests.
+	resetRootFlags(t, "host", "port", "ssl", "verify-ssl")
+	defer resetRootFlags(t, "host", "port", "ssl", "verify-ssl")
 
 	t.Run("Environment variables fallbacks when flags are omitted", func(t *testing.T) {
 		_ = os.Setenv("LOOKERSDK_BASE_URL", "https://env-host-name.com:8888")
